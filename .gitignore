@@ -1,0 +1,21 @@
+# Dependencies & build outputs
+node_modules
+dist
+dist-ssr
+*.tsbuildinfo
+
+# Environment variables & secrets (절대 GitHub 업로드 금지)
+.env
+.env.local
+.env.*.local
+.env.production
+
+# Local personal notes / tokens
+Figma token.txt
+지도.txt
+
+# Deployment & IDE caches
+.vercel
+.firebase
+.DS_Store
+Thumbs.db
