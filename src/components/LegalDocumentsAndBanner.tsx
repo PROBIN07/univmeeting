@@ -220,7 +220,7 @@ export function FooterAdBannerCarousel({
       onBlur={() => setPaused(false)}
       role="region"
       aria-label="제휴 및 광고 배너"
-      className="relative aspect-[3300/564] w-full max-w-[620px] shrink-0 overflow-hidden rounded-[3px] bg-[#FFFFFF] shadow-[0_2px_10px_rgba(13,5,10,0.08)] md:w-[480px] lg:w-[560px] xl:w-[620px]"
+      className="relative aspect-[3300/564] w-full max-w-[520px] shrink-0 overflow-hidden rounded-[6px] bg-[#FFFFFF] shadow-[0_2px_10px_rgba(13,5,10,0.08)] md:w-[420px] lg:w-[480px] xl:w-[520px]"
     >
       {FOOTER_AD_BANNERS.map((banner, idx) => {
         const isActive = idx === activeIndex;
