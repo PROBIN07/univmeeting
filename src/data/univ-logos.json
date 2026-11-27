@@ -1,0 +1,587 @@
+[
+ {
+  "name": "서울대학교",
+  "region": "서울",
+  "logo": ""
+ },
+ {
+  "name": "연세대학교",
+  "region": "서울",
+  "logo": "/logos/yonsei.svg"
+ },
+ {
+  "name": "고려대학교",
+  "region": "서울",
+  "logo": "/logos/korea.svg"
+ },
+ {
+  "name": "서강대학교",
+  "region": "서울",
+  "logo": ""
+ },
+ {
+  "name": "성균관대학교",
+  "region": "서울",
+  "logo": ""
+ },
+ {
+  "name": "한양대학교",
+  "region": "서울",
+  "logo": ""
+ },
+ {
+  "name": "중앙대학교",
+  "region": "서울",
+  "logo": ""
+ },
+ {
+  "name": "경희대학교",
+  "region": "서울",
+  "logo": "/logos/kyunghee.svg"
+ },
+ {
+  "name": "한국외국어대학교",
+  "region": "서울",
+  "logo": ""
+ },
+ {
+  "name": "서울시립대학교",
+  "region": "서울",
+  "logo": ""
+ },
+ {
+  "name": "이화여자대학교",
+  "region": "서울",
+  "logo": "/logos/ewha.svg"
+ },
+ {
+  "name": "건국대학교",
+  "region": "서울",
+  "logo": "/logos/konkuk.svg"
+ },
+ {
+  "name": "동국대학교",
+  "region": "서울",
+  "logo": ""
+ },
+ {
+  "name": "홍익대학교",
+  "region": "서울",
+  "logo": ""
+ },
+ {
+  "name": "숙명여자대학교",
+  "region": "서울",
+  "logo": "/logos/sookmyung.svg"
+ },
+ {
+  "name": "국민대학교",
+  "region": "서울",
+  "logo": ""
+ },
+ {
+  "name": "숭실대학교",
+  "region": "서울",
+  "logo": ""
+ },
+ {
+  "name": "세종대학교",
+  "region": "서울",
+  "logo": ""
+ },
+ {
+  "name": "광운대학교",
+  "region": "서울",
+  "logo": ""
+ },
+ {
+  "name": "명지대학교",
+  "region": "서울",
+  "logo": ""
+ },
+ {
+  "name": "상명대학교",
+  "region": "서울",
+  "logo": ""
+ },
+ {
+  "name": "서울과학기술대학교",
+  "region": "서울",
+  "logo": ""
+ },
+ {
+  "name": "성신여자대학교",
+  "region": "서울",
+  "logo": ""
+ },
+ {
+  "name": "동덕여자대학교",
+  "region": "서울",
+  "logo": ""
+ },
+ {
+  "name": "덕성여자대학교",
+  "region": "서울",
+  "logo": ""
+ },
+ {
+  "name": "서울여자대학교",
+  "region": "서울",
+  "logo": ""
+ },
+ {
+  "name": "삼육대학교",
+  "region": "서울",
+  "logo": ""
+ },
+ {
+  "name": "한성대학교",
+  "region": "서울",
+  "logo": ""
+ },
+ {
+  "name": "서경대학교",
+  "region": "서울",
+  "logo": ""
+ },
+ {
+  "name": "총신대학교",
+  "region": "서울",
+  "logo": ""
+ },
+ {
+  "name": "한국체육대학교",
+  "region": "서울",
+  "logo": ""
+ },
+ {
+  "name": "한국예술종합학교",
+  "region": "서울",
+  "logo": ""
+ },
+ {
+  "name": "서울교육대학교",
+  "region": "서울",
+  "logo": ""
+ },
+ {
+  "name": "인하대학교",
+  "region": "경기·인천",
+  "logo": ""
+ },
+ {
+  "name": "인천대학교",
+  "region": "경기·인천",
+  "logo": ""
+ },
+ {
+  "name": "아주대학교",
+  "region": "경기·인천",
+  "logo": ""
+ },
+ {
+  "name": "가천대학교",
+  "region": "경기·인천",
+  "logo": "/logos/gachon.svg"
+ },
+ {
+  "name": "경기대학교",
+  "region": "경기·인천",
+  "logo": "/logos/kyonggi.svg"
+ },
+ {
+  "name": "단국대학교",
+  "region": "경기·인천",
+  "logo": "/logos/dankook.svg"
+ },
+ {
+  "name": "가톨릭대학교",
+  "region": "경기·인천",
+  "logo": ""
+ },
+ {
+  "name": "한국항공대학교",
+  "region": "경기·인천",
+  "logo": ""
+ },
+ {
+  "name": "한국공학대학교",
+  "region": "경기·인천",
+  "logo": ""
+ },
+ {
+  "name": "수원대학교",
+  "region": "경기·인천",
+  "logo": ""
+ },
+ {
+  "name": "용인대학교",
+  "region": "경기·인천",
+  "logo": ""
+ },
+ {
+  "name": "강남대학교",
+  "region": "경기·인천",
+  "logo": ""
+ },
+ {
+  "name": "한신대학교",
+  "region": "경기·인천",
+  "logo": ""
+ },
+ {
+  "name": "평택대학교",
+  "region": "경기·인천",
+  "logo": ""
+ },
+ {
+  "name": "대진대학교",
+  "region": "경기·인천",
+  "logo": ""
+ },
+ {
+  "name": "차의과학대학교",
+  "region": "경기·인천",
+  "logo": ""
+ },
+ {
+  "name": "한경국립대학교",
+  "region": "경기·인천",
+  "logo": ""
+ },
+ {
+  "name": "경인교육대학교",
+  "region": "경기·인천",
+  "logo": ""
+ },
+ {
+  "name": "강원대학교",
+  "region": "강원",
+  "logo": "/logos/kangwon.svg"
+ },
+ {
+  "name": "한림대학교",
+  "region": "강원",
+  "logo": "/logos/hallym.svg"
+ },
+ {
+  "name": "강릉원주대학교",
+  "region": "강원",
+  "logo": ""
+ },
+ {
+  "name": "가톨릭관동대학교",
+  "region": "강원",
+  "logo": ""
+ },
+ {
+  "name": "상지대학교",
+  "region": "강원",
+  "logo": ""
+ },
+ {
+  "name": "한라대학교",
+  "region": "강원",
+  "logo": ""
+ },
+ {
+  "name": "충남대학교",
+  "region": "충청·대전",
+  "logo": "/logos/chungnam.svg"
+ },
+ {
+  "name": "충북대학교",
+  "region": "충청·대전",
+  "logo": "/logos/chungbuk.svg"
+ },
+ {
+  "name": "한국과학기술원",
+  "region": "충청·대전",
+  "logo": ""
+ },
+ {
+  "name": "한밭대학교",
+  "region": "충청·대전",
+  "logo": ""
+ },
+ {
+  "name": "대전대학교",
+  "region": "충청·대전",
+  "logo": ""
+ },
+ {
+  "name": "배재대학교",
+  "region": "충청·대전",
+  "logo": ""
+ },
+ {
+  "name": "우송대학교",
+  "region": "충청·대전",
+  "logo": ""
+ },
+ {
+  "name": "한남대학교",
+  "region": "충청·대전",
+  "logo": ""
+ },
+ {
+  "name": "목원대학교",
+  "region": "충청·대전",
+  "logo": ""
+ },
+ {
+  "name": "공주대학교",
+  "region": "충청·대전",
+  "logo": ""
+ },
+ {
+  "name": "순천향대학교",
+  "region": "충청·대전",
+  "logo": ""
+ },
+ {
+  "name": "호서대학교",
+  "region": "충청·대전",
+  "logo": ""
+ },
+ {
+  "name": "선문대학교",
+  "region": "충청·대전",
+  "logo": ""
+ },
+ {
+  "name": "남서울대학교",
+  "region": "충청·대전",
+  "logo": ""
+ },
+ {
+  "name": "백석대학교",
+  "region": "충청·대전",
+  "logo": ""
+ },
+ {
+  "name": "한국교원대학교",
+  "region": "충청·대전",
+  "logo": ""
+ },
+ {
+  "name": "청주대학교",
+  "region": "충청·대전",
+  "logo": ""
+ },
+ {
+  "name": "서원대학교",
+  "region": "충청·대전",
+  "logo": ""
+ },
+ {
+  "name": "한국기술교육대학교",
+  "region": "충청·대전",
+  "logo": ""
+ },
+ {
+  "name": "전남대학교",
+  "region": "전라·광주",
+  "logo": "/logos/chonnam.svg"
+ },
+ {
+  "name": "전북대학교",
+  "region": "전라·광주",
+  "logo": "/logos/jeonbuk.svg"
+ },
+ {
+  "name": "조선대학교",
+  "region": "전라·광주",
+  "logo": ""
+ },
+ {
+  "name": "광주과학기술원",
+  "region": "전라·광주",
+  "logo": ""
+ },
+ {
+  "name": "광주대학교",
+  "region": "전라·광주",
+  "logo": ""
+ },
+ {
+  "name": "호남대학교",
+  "region": "전라·광주",
+  "logo": ""
+ },
+ {
+  "name": "원광대학교",
+  "region": "전라·광주",
+  "logo": "/logos/wonkwang.svg"
+ },
+ {
+  "name": "군산대학교",
+  "region": "전라·광주",
+  "logo": "/logos/kunsan.svg"
+ },
+ {
+  "name": "우석대학교",
+  "region": "전라·광주",
+  "logo": "/logos/woosuk.svg"
+ },
+ {
+  "name": "전주대학교",
+  "region": "전라·광주",
+  "logo": "/logos/jeonju.svg"
+ },
+ {
+  "name": "목포대학교",
+  "region": "전라·광주",
+  "logo": ""
+ },
+ {
+  "name": "순천대학교",
+  "region": "전라·광주",
+  "logo": ""
+ },
+ {
+  "name": "동신대학교",
+  "region": "전라·광주",
+  "logo": ""
+ },
+ {
+  "name": "경북대학교",
+  "region": "경상·부산·울산",
+  "logo": "/logos/kyungpook.svg"
+ },
+ {
+  "name": "영남대학교",
+  "region": "경상·부산·울산",
+  "logo": "/logos/yeungnam.svg"
+ },
+ {
+  "name": "계명대학교",
+  "region": "경상·부산·울산",
+  "logo": "/logos/keimyung.svg"
+ },
+ {
+  "name": "대구대학교",
+  "region": "경상·부산·울산",
+  "logo": ""
+ },
+ {
+  "name": "대구가톨릭대학교",
+  "region": "경상·부산·울산",
+  "logo": ""
+ },
+ {
+  "name": "대구한의대학교",
+  "region": "경상·부산·울산",
+  "logo": ""
+ },
+ {
+  "name": "금오공과대학교",
+  "region": "경상·부산·울산",
+  "logo": ""
+ },
+ {
+  "name": "안동대학교",
+  "region": "경상·부산·울산",
+  "logo": ""
+ },
+ {
+  "name": "한동대학교",
+  "region": "경상·부산·울산",
+  "logo": ""
+ },
+ {
+  "name": "포항공과대학교",
+  "region": "경상·부산·울산",
+  "logo": ""
+ },
+ {
+  "name": "대구경북과학기술원",
+  "region": "경상·부산·울산",
+  "logo": ""
+ },
+ {
+  "name": "경일대학교",
+  "region": "경상·부산·울산",
+  "logo": ""
+ },
+ {
+  "name": "부산대학교",
+  "region": "경상·부산·울산",
+  "logo": "/logos/pusan.svg"
+ },
+ {
+  "name": "부경대학교",
+  "region": "경상·부산·울산",
+  "logo": ""
+ },
+ {
+  "name": "동아대학교",
+  "region": "경상·부산·울산",
+  "logo": "/logos/donga.svg"
+ },
+ {
+  "name": "경성대학교",
+  "region": "경상·부산·울산",
+  "logo": ""
+ },
+ {
+  "name": "동의대학교",
+  "region": "경상·부산·울산",
+  "logo": ""
+ },
+ {
+  "name": "신라대학교",
+  "region": "경상·부산·울산",
+  "logo": ""
+ },
+ {
+  "name": "동서대학교",
+  "region": "경상·부산·울산",
+  "logo": ""
+ },
+ {
+  "name": "부산외국어대학교",
+  "region": "경상·부산·울산",
+  "logo": ""
+ },
+ {
+  "name": "한국해양대학교",
+  "region": "경상·부산·울산",
+  "logo": ""
+ },
+ {
+  "name": "인제대학교",
+  "region": "경상·부산·울산",
+  "logo": ""
+ },
+ {
+  "name": "경상국립대학교",
+  "region": "경상·부산·울산",
+  "logo": "/logos/gnu.svg"
+ },
+ {
+  "name": "창원대학교",
+  "region": "경상·부산·울산",
+  "logo": ""
+ },
+ {
+  "name": "경남대학교",
+  "region": "경상·부산·울산",
+  "logo": ""
+ },
+ {
+  "name": "울산대학교",
+  "region": "경상·부산·울산",
+  "logo": ""
+ },
+ {
+  "name": "울산과학기술원",
+  "region": "경상·부산·울산",
+  "logo": ""
+ },
+ {
+  "name": "제주대학교",
+  "region": "제주",
+  "logo": "/logos/jeju.svg"
+ }
+]

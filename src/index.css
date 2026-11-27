@@ -1,5 +1,79 @@
 @import "tailwindcss";
 
+@font-face {
+  font-family: 'Paperlogy';
+  font-weight: 400;
+  font-display: swap;
+  src: url('https://cdn.jsdelivr.net/gh/projectnoonnu/2408-3@1.0/Paperlogy-4Regular.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Paperlogy';
+  font-weight: 500;
+  font-display: swap;
+  src: url('https://cdn.jsdelivr.net/gh/projectnoonnu/2408-3@1.0/Paperlogy-5Medium.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Paperlogy';
+  font-weight: 600;
+  font-display: swap;
+  src: url('https://cdn.jsdelivr.net/gh/projectnoonnu/2408-3@1.0/Paperlogy-6SemiBold.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Paperlogy';
+  font-weight: 700;
+  font-display: swap;
+  src: url('https://cdn.jsdelivr.net/gh/projectnoonnu/2408-3@1.0/Paperlogy-7Bold.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Paperlogy';
+  font-weight: 800;
+  font-display: swap;
+  src: url('https://cdn.jsdelivr.net/gh/projectnoonnu/2408-3@1.0/Paperlogy-8ExtraBold.woff2') format('woff2');
+}
+
+@theme {
+  --font-sans: 'Paperlogy', 'Noto Sans KR', -apple-system, BlinkMacSystemFont, sans-serif;
+}
+
+:root {
+  --text-primary: #0d050a;
+  --text-secondary: #4a3842;
+  --text-muted: #6e5464;
+  --text-on-ink: #ffffff;
+
+  --surface-base: #ffffff;
+  --surface-blush: #f7d8e4;
+  --surface-blush-soft: #fbebf1;
+
+  --accent-pink: #f7c1d4;
+  --accent-mauve: #8e7182;
+
+  --border-subtle: #ebcdd9;
+  --border-default: #d8b4c4;
+
+  --user-male: #abd2fa;
+  --user-female: #f7c1d4;
+
+  --radius-control: 8px;
+  --radius-card: 12px;
+  --radius-modal: 16px;
+  --radius-pill: 999px;
+
+  --overlay: color-mix(in srgb, var(--text-primary) 50%, transparent);
+  --shadow-modal: 0 12px 32px color-mix(in srgb, var(--text-primary) 18%, transparent);
+  --shadow-card: 0 4px 16px color-mix(in srgb, var(--text-primary) 8%, transparent);
+
+  --page-x: 120px;
+  --font: 'Paperlogy', 'Noto Sans KR', -apple-system, BlinkMacSystemFont, sans-serif;
+}
+
+@media (max-width: 1024px) {
+  :root { --page-x: 40px; }
+}
+@media (max-width: 640px) {
+  :root { --page-x: 16px; }
+}
+
 @layer base {
   *,
   *::before,
@@ -10,9 +84,33 @@
   body {
     margin: 0;
     padding: 0;
-    font-family: 'Noto Sans KR', -apple-system, BlinkMacSystemFont, sans-serif;
+    font-family: var(--font);
+    letter-spacing: -0.01em;
+    word-break: keep-all;
     background-color: #FFFFFF;
     color: #0D050A;
+    line-height: 1.45;
+    min-width: 320px;
     -webkit-font-smoothing: antialiased;
   }
+
+  button,
+  input,
+  textarea,
+  select {
+    font-family: inherit;
+  }
+
+  /* 키보드 전용 이동(Tab 포커스) 시각적 윤곽선 보장 */
+  :focus-visible {
+    outline: 2px solid #0D050A;
+    outline-offset: 2px;
+  }
+}
+
+/* 네이버 지도 내부 타일(img/canvas)이 Tailwind Preflight max-width:100%로 인해 확대 시 깨지거나 회색으로 비는 현상 방지 */
+.naver-map-container img,
+.naver-map-container canvas {
+  max-width: none !important;
+  max-height: none !important;
 }

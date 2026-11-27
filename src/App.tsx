@@ -5,6 +5,11 @@ import {
   SchoolVerificationView,
   SignupView,
 } from './components/AuthAndVerificationPages';
+import { HomeV2 } from './components/HomeV2';
+import {
+  CookieConsentBanner,
+  SubpageLegalFooter,
+} from './components/LegalDocumentsAndBanner';
 import { NaverUniversityMap } from './components/NaverUniversityMap';
 import { OverlayModal } from './components/OverlayModal';
 import {
@@ -18,14 +23,14 @@ import {
   createMeetingRoom,
   deleteBoardPost,
   deleteMeetingRoom,
-  loadAllLocalUsers,
+  deleteMyVerificationData,
+  deleteUserDataByAdmin,
   loadCachedCurrentUser,
-  loadLocalInquiries,
   loadLocalPosts,
-  loadLocalReports,
   loadLocalRooms,
   loadLocalVerificationRequests,
   logoutUser,
+  repairApprovedUsersInFirestore,
   reviewVerificationRequest,
   setUserVerificationByAdmin,
   submitInquiry,
@@ -34,6 +39,7 @@ import {
   subscribeAllUsers,
   subscribeAuthAndProfile,
   subscribeInquiries,
+  subscribeMyVerificationRequest,
   subscribePosts,
   subscribeReports,
   subscribeRooms,
@@ -41,7 +47,10 @@ import {
   toggleBoardPostStatus,
   togglePostApply,
   toggleRoomJoin,
+  translateFirebaseAuthError,
+  withdrawUserAccount,
 } from './services/meetingService';
+import { sanitizeUrlEntityId } from './utils/security';
 import type {
   ActiveOverlayState,
   BoardPost,
@@ -54,7 +63,6 @@ import type {
   ReportRecord,
   RoomFormat,
   SidoGroup,
-  StepItem,
   ToastId,
   UserProfile,
   VerificationRequest,
@@ -72,40 +80,6 @@ export const TOAST_MESSAGES: Record<ToastId, string> = {
 };
 
 const NAV_ITEMS: string[] = ['주선', '지도', '게시판'];
-
-const STEP_ITEMS: StepItem[] = [
-  {
-    id: '4:34',
-    step: 'STEP 1',
-    title: '학교 인증',
-    description: '학번과 재학증명서를 올려 재학생 승인을 받아요',
-  },
-  {
-    id: '4:38',
-    step: 'STEP 2',
-    title: '방 고르기',
-    description: '내 대학이 포함된 방을 찾거나 새 방을 만들어요',
-  },
-  {
-    id: '4:42',
-    step: 'STEP 3',
-    title: '팀 채우기',
-    description: '양쪽 대학 자리가 모두 차면 미팅이 성사돼요',
-  },
-  {
-    id: '4:46',
-    step: 'STEP 4',
-    title: '만나기',
-    description: '일정과 지역을 조율해 편하게 만나요',
-  },
-];
-
-const FOOTER_LINKS: string[] = [
-  '이용약관',
-  '개인정보처리방침',
-  '신고 센터',
-  '문의하기',
-];
 
 const FORMAT_OPTIONS: RoomFormat[] = ['2:2', '3:3', '4:4'];
 
@@ -140,11 +114,22 @@ function readInitialRouteFromUrl(): {
   postId: string;
 } {
   try {
+    // 1) /admin, /.env 등 비허용 하위 경로 직접 접근 시 즉시 루트('/')로 정규화 (#1 방어)
+    if (window.location.pathname !== '/') {
+      window.history.replaceState(null, '', '/');
+      return { page: 'home', roomId: '', postId: '' };
+    }
+
     const params = new URLSearchParams(window.location.search);
-    const roomParam = params.get('room') ?? '';
-    const postParam = params.get('post') ?? '';
+    // 2) URL ID 조작·특수문자·스크립트 파라미터 정규식 검증 (#2 방어)
+    const roomParam = sanitizeUrlEntityId(params.get('room'));
+    const postParam = sanitizeUrlEntityId(params.get('post'));
     const pageParam = params.get('page') as PageId | null;
 
+    if (pageParam === 'admin') {
+      window.history.replaceState(null, '', '/');
+      return { page: 'home', roomId: '', postId: '' };
+    }
     if (roomParam) {
       return { page: 'room-detail', roomId: roomParam, postId: postParam };
     }
@@ -234,7 +219,7 @@ function ToastOverlay({
     <div
       role="status"
       aria-live="polite"
-      className="pointer-events-none fixed inset-x-0 bottom-0 z-50 flex flex-col items-center justify-end px-4 pb-[48px] pt-[0px] font-['Noto_Sans_KR',sans-serif]"
+      className="pointer-events-none fixed inset-x-0 bottom-0 z-50 flex flex-col items-center justify-end px-4 pb-[48px] pt-[0px]"
     >
       <div
         onClick={onDismiss}
@@ -256,6 +241,7 @@ function ChevronDownIcon() {
       viewBox="0 0 16 16"
       fill="none"
       xmlns="http://www.w3.org/2000/svg"
+      aria-hidden="true"
       className="h-[16px] w-[16px] shrink-0"
     >
       <path
@@ -277,6 +263,7 @@ function SearchIcon() {
       viewBox="0 0 18 18"
       fill="none"
       xmlns="http://www.w3.org/2000/svg"
+      aria-hidden="true"
       className="h-[18px] w-[18px] shrink-0"
     >
       <path
@@ -298,11 +285,14 @@ function GenderTag({ gender }: { gender: GenderType }) {
   const isMale = gender === '남';
   return (
     <span
+      aria-label={isMale ? '남성' : '여성'}
       className={`inline-flex shrink-0 flex-row items-center rounded-[999px] px-[8px] py-[2px] ${
         isMale ? 'bg-[#ABD2FA]' : 'bg-[#F7C1D4]'
       }`}
     >
-      <span className="text-[12px] font-bold leading-[1.45] text-[#0D050A]">{gender}</span>
+      <span aria-hidden="true" className="text-[12px] font-bold leading-[1.45] text-[#0D050A]">
+        {gender}
+      </span>
     </span>
   );
 }
@@ -314,10 +304,13 @@ function PaginationButton({
   item: PaginationItem;
   onClick?: () => void;
 }) {
+  const ariaLabel = item.label === '>' ? '다음 페이지' : `${item.label}페이지`;
   if (item.variant === 'active') {
     return (
       <button
         type="button"
+        aria-label={ariaLabel}
+        aria-current="page"
         onClick={onClick}
         className="flex h-[36px] w-[36px] cursor-pointer flex-row items-center justify-center rounded-[8px] border border-[#F7C1D4] bg-[#F7C1D4]"
       >
@@ -329,6 +322,7 @@ function PaginationButton({
   return (
     <button
       type="button"
+      aria-label={ariaLabel}
       onClick={onClick}
       className="flex h-[36px] w-[36px] cursor-pointer flex-row items-center justify-center rounded-[8px] border border-[#D8B4C4] bg-[#FFFFFF]"
     >
@@ -410,7 +404,15 @@ function PostRowItemView({
 
   return (
     <article
+      role="link"
+      tabIndex={0}
       onClick={onSelect}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          onSelect();
+        }
+      }}
       className="flex cursor-pointer flex-row items-center gap-[16px] self-stretch border-b border-[#EBCDD9] bg-[#FFFFFF] px-4 py-[20px] sm:gap-[20px] sm:px-[24px]"
     >
       {isRecruiting ? (
@@ -453,8 +455,8 @@ function getNavItemClassName(activePage: PageId, item: string): string {
       item === '게시판');
 
   return isActive
-    ? 'text-[16px] font-bold text-[#0D050A] no-underline'
-    : 'text-[16px] font-medium text-[#6E5464] no-underline';
+    ? 'text-[16px] font-bold text-[#F7C1D4] no-underline'
+    : 'text-[16px] font-medium text-[#FFFFFF]/65 transition-colors hover:text-[#FFFFFF] no-underline';
 }
 
 function GNB({
@@ -488,9 +490,9 @@ function GNB({
         <button
           type="button"
           onClick={() => onNavigate('school-auth')}
-          className="hidden cursor-pointer flex-row items-center rounded-[999px] border border-[#D8B4C4] bg-[#F7D8E4] px-[14px] py-[6px] sm:flex"
+          className="hidden cursor-pointer flex-row items-center rounded-[999px] border border-[#F7D8E4] bg-[#F7D8E4] px-[14px] py-[6px] sm:flex"
         >
-          <span className="text-[14px] font-bold text-[#4A3842]">학교 인증 심사 중</span>
+          <span className="text-[14px] font-bold text-[#0D050A]">학교 인증 심사 중</span>
         </button>
       );
     }
@@ -509,25 +511,31 @@ function GNB({
       <button
         type="button"
         onClick={() => onNavigate('school-auth')}
-        className="hidden cursor-pointer flex-row items-center rounded-[999px] border border-[#D8B4C4] bg-[#FFFFFF] px-[14px] py-[6px] sm:flex"
+        className="hidden cursor-pointer flex-row items-center rounded-[999px] border border-[#F7C1D4]/50 bg-transparent px-[14px] py-[6px] transition-colors hover:bg-[#F7C1D4]/15 sm:flex"
       >
-        <span className="text-[14px] font-medium text-[#0D050A]">학교 인증하기</span>
+        <span className="text-[14px] font-medium text-[#F7C1D4]">학교 인증하기</span>
       </button>
     );
   };
 
   return (
-    <header className="flex h-[72px] w-full max-w-[1440px] flex-row items-center justify-between bg-[#FFFFFF] px-5 py-[0px] md:px-12 xl:px-[120px]">
+    <header className="flex h-[72px] w-full max-w-[1440px] flex-row items-center justify-between bg-[#0D050A] px-5 py-[0px] md:px-12 xl:px-[120px]">
       <div className="flex flex-row items-center gap-6 sm:gap-[56px]">
-        <div
+        <button
+          type="button"
           onClick={() => onNavigate('home')}
-          className="flex cursor-pointer flex-row items-center gap-[8px]"
+          aria-label="Univmeeting 홈으로 이동"
+          className="flex cursor-pointer flex-row items-center gap-[8px] border-0 bg-transparent p-0 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-[#F7C1D4]"
         >
-          <div className="h-[28px] w-[28px] rounded-[6px] bg-[#F7C1D4]" />
-          <span className="text-[20px] font-bold text-[#0D050A]">대학미팅</span>
-        </div>
+          <img
+            src="/logo.svg?v=2"
+            alt="Univmeeting 로고"
+            className="h-[28px] w-[28px] rounded-[6px] object-cover"
+          />
+          <span className="text-[20px] font-bold text-[#FFFFFF]">Univmeeting</span>
+        </button>
 
-        <nav className="flex flex-row items-center gap-5 sm:gap-[36px]">
+        <nav aria-label="주요 메뉴" className="flex flex-row items-center gap-5 sm:gap-[36px]">
           {NAV_ITEMS.map((item) => (
             <a
               key={item}
@@ -568,7 +576,7 @@ function GNB({
             <button
               type="button"
               onClick={onLogout}
-              className="cursor-pointer rounded-[8px] border border-[#D8B4C4] bg-[#FFFFFF] px-[12px] py-[6px] text-[13px] font-medium text-[#4A3842]"
+              className="cursor-pointer rounded-[8px] border border-[#FFFFFF]/30 bg-transparent px-[12px] py-[6px] text-[13px] font-medium text-[#FFFFFF]/85 transition-colors hover:bg-[#FFFFFF]/10"
             >
               로그아웃
             </button>
@@ -578,14 +586,14 @@ function GNB({
             <button
               type="button"
               onClick={() => onNavigate('login')}
-              className="cursor-pointer rounded-[8px] border border-[#D8B4C4] bg-[#FFFFFF] px-[16px] py-[8px] text-[14px] font-medium text-[#0D050A]"
+              className="cursor-pointer rounded-[8px] border border-[#FFFFFF]/35 bg-transparent px-[16px] py-[8px] text-[14px] font-medium text-[#FFFFFF] transition-colors hover:bg-[#FFFFFF]/10"
             >
               로그인
             </button>
             <button
               type="button"
               onClick={() => onNavigate('signup')}
-              className="cursor-pointer rounded-[8px] border-0 bg-[#0D050A] px-[16px] py-[8px] text-[14px] font-medium text-[#FFFFFF]"
+              className="cursor-pointer rounded-[8px] border-0 bg-[#F7C1D4] px-[16px] py-[8px] text-[14px] font-bold text-[#0D050A] transition-all hover:brightness-105"
             >
               회원가입
             </button>
@@ -646,12 +654,13 @@ function BoardDetailPage({
   return (
     <div className="mx-auto flex w-full max-w-[1440px] flex-col bg-[#FFFFFF]">
       <main className="flex flex-col gap-[24px] self-stretch px-5 py-[40px] md:px-12 xl:px-[120px]">
-        <div
+        <button
+          type="button"
           onClick={() => onNavigate('board')}
-          className="w-fit cursor-pointer whitespace-pre text-[14px] font-normal leading-[1.45] text-[#6E5464]"
+          className="w-fit cursor-pointer border-0 bg-transparent p-0 text-left whitespace-pre text-[14px] font-normal leading-[1.45] text-[#6E5464] hover:underline"
         >
           {`게시판  >  ${tabLabel}`}
-        </div>
+        </button>
 
         <div className="flex flex-col items-start gap-[32px] self-stretch lg:flex-row">
           <div className="flex w-full flex-1 flex-col items-stretch gap-[36px]">
@@ -834,6 +843,9 @@ function MyPage({
   onSelectPost,
   onRequestCreateRoom,
   onRequestWritePost,
+  onDeleteVerificationOnly,
+  onWithdrawAccount,
+  onOpenOverlay,
   onNavigate,
 }: {
   user: UserProfile | null;
@@ -843,9 +855,17 @@ function MyPage({
   onSelectPost: (postId: string) => void;
   onRequestCreateRoom: () => void;
   onRequestWritePost: () => void;
+  onDeleteVerificationOnly: () => Promise<void>;
+  onWithdrawAccount: (password: string) => Promise<void>;
+  onOpenOverlay: (overlay: ActiveOverlayState) => void;
   onNavigate: (page: PageId) => void;
 }) {
   const [activeTab, setActiveTab] = useState<'joined' | 'hosted' | 'posts'>('joined');
+  const [showWithdrawForm, setShowWithdrawForm] = useState<boolean>(false);
+  const [withdrawPassword, setWithdrawPassword] = useState<string>('');
+  const [withdrawConsented, setWithdrawConsented] = useState<boolean>(false);
+  const [withdrawError, setWithdrawError] = useState<string | null>(null);
+  const [withdrawing, setWithdrawing] = useState<boolean>(false);
 
   const joinedRooms = useMemo(
     () =>
@@ -1025,6 +1045,159 @@ function MyPage({
             </div>
           )}
         </section>
+
+        {/* 개인정보 열람·파기 및 회원탈퇴 관리 섹션 */}
+        <section
+          aria-labelledby="account-privacy-heading"
+          className="flex flex-col gap-[16px] self-stretch rounded-[16px] border border-[#EBCDD9] bg-[#FBEBF1]/60 p-[24px]"
+        >
+          <div className="flex flex-col gap-[4px]">
+            <h2
+              id="account-privacy-heading"
+              className="m-0 text-[18px] font-bold leading-[1.45] text-[#0D050A]"
+            >
+              개인정보 및 계정 관리
+            </h2>
+            <p className="m-0 text-[14px] text-[#4A3842]">
+              제출한 재학증명서·학번 원본 파기, 개인정보 삭제 요청 및 회원 탈퇴를 진행할 수 있어요.
+            </p>
+          </div>
+
+          <div className="flex flex-row flex-wrap items-center gap-[10px]">
+            {user.verificationStatus !== 'unverified' && (
+              <button
+                type="button"
+                onClick={() => {
+                  if (
+                    window.confirm(
+                      '제출하신 재학증명서 파일과 학번 정보를 서버에서 즉시 영구 파기할까요? (계정은 유지되며 학교 인증은 미인증 상태로 전환됩니다)'
+                    )
+                  ) {
+                    void onDeleteVerificationOnly();
+                  }
+                }}
+                className="cursor-pointer rounded-[8px] border border-[#D8B4C4] bg-[#FFFFFF] px-[14px] py-[9px] text-[13px] font-medium text-[#4A3842]"
+              >
+                재학증명서·학번 원본 파기
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => onOpenOverlay({ id: 'privacy-delete' })}
+              className="cursor-pointer rounded-[8px] border border-[#D8B4C4] bg-[#FFFFFF] px-[14px] py-[9px] text-[13px] font-medium text-[#0D050A]"
+            >
+              개인정보 삭제 요청
+            </button>
+            <button
+              type="button"
+              aria-expanded={showWithdrawForm}
+              onClick={() => {
+                setShowWithdrawForm((v) => !v);
+                setWithdrawError(null);
+              }}
+              className="cursor-pointer rounded-[8px] border border-[#F5C2C7] bg-[#FFF5F5] px-[14px] py-[9px] text-[13px] font-bold text-[#B42318]"
+            >
+              {showWithdrawForm ? '회원 탈퇴 닫기' : '회원 탈퇴'}
+            </button>
+          </div>
+
+          {showWithdrawForm && (
+            <form
+              onSubmit={async (e) => {
+                e.preventDefault();
+                if (!withdrawPassword) {
+                  setWithdrawError('본인 확인을 위해 현재 로그인 비밀번호를 입력해 주세요.');
+                  return;
+                }
+                if (!withdrawConsented) {
+                  setWithdrawError('영구 삭제 안내 동의 항목에 체크해 주세요.');
+                  return;
+                }
+                if (withdrawing) return;
+                setWithdrawError(null);
+                setWithdrawing(true);
+                try {
+                  await onWithdrawAccount(withdrawPassword);
+                } catch (err) {
+                  setWithdrawError(translateFirebaseAuthError(err));
+                } finally {
+                  setWithdrawing(false);
+                }
+              }}
+              className="flex flex-col gap-[12px] rounded-[12px] border border-[#F5C2C7] bg-[#FFFFFF] p-[20px]"
+            >
+              <span className="text-[15px] font-bold text-[#B42318]">
+                회원탈퇴 및 전체 개인정보 즉시 파기 확인
+              </span>
+              <p className="m-0 text-[13px] leading-[1.5] text-[#4A3842]">
+                탈퇴 즉시 회원 계정({user.email}), 학번, 재학증명서 사본, 직접 개설한 미팅 방({hostedRooms.length}개), 작성한 모집글({myPosts.length}개) 및 참여 신청 기록이 서버에서 복구 불가능하게 영구 삭제됩니다.
+              </p>
+
+              <div className="flex flex-col gap-[6px]">
+                <label htmlFor="withdraw-password" className="text-[13px] font-bold text-[#0D050A]">
+                  현재 비밀번호 재확인
+                </label>
+                <div className="flex h-[42px] max-w-[360px] flex-row items-center rounded-[8px] border border-[#D8B4C4] bg-[#FFFFFF] px-[12px] focus-within:ring-2 focus-within:ring-[#0D050A]">
+                  <input
+                    id="withdraw-password"
+                    type="password"
+                    autoComplete="current-password"
+                    value={withdrawPassword}
+                    onChange={(e) => {
+                      setWithdrawPassword(e.target.value);
+                      setWithdrawError(null);
+                    }}
+                    placeholder="현재 비밀번호 입력"
+                    className="w-full border-0 bg-transparent p-0 text-[14px] text-[#0D050A] placeholder:text-[#6E5464] focus:outline-none"
+                  />
+                </div>
+              </div>
+
+              <label className="flex cursor-pointer flex-row items-start gap-[8px] text-[13px] text-[#0D050A]">
+                <input
+                  type="checkbox"
+                  checked={withdrawConsented}
+                  onChange={(e) => {
+                    setWithdrawConsented(e.target.checked);
+                    setWithdrawError(null);
+                  }}
+                  className="mt-[2px] h-[16px] w-[16px] shrink-0 accent-[#B42318]"
+                />
+                <span>
+                  <strong>[필수]</strong> 모든 개인정보 및 활동 내역이 즉시 영구 파기되며 복구할 수 없음을 확인하고 탈퇴에 동의합니다.
+                </span>
+              </label>
+
+              {withdrawError && (
+                <span className="text-[13px] font-medium text-[#B42318]">
+                  {withdrawError}
+                </span>
+              )}
+
+              <div className="flex flex-row justify-end gap-[8px]">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowWithdrawForm(false);
+                    setWithdrawPassword('');
+                    setWithdrawConsented(false);
+                    setWithdrawError(null);
+                  }}
+                  className="cursor-pointer rounded-[8px] border border-[#D8B4C4] bg-[#FFFFFF] px-[16px] py-[9px] text-[13px] font-medium text-[#0D050A]"
+                >
+                  취소
+                </button>
+                <button
+                  type="submit"
+                  disabled={withdrawing}
+                  className="cursor-pointer rounded-[8px] border-0 bg-[#B42318] px-[18px] py-[9px] text-[13px] font-bold text-[#FFFFFF] disabled:opacity-60"
+                >
+                  {withdrawing ? '파기 및 탈퇴 처리 중...' : '회원탈퇴 및 전체 정보 영구 삭제'}
+                </button>
+              </div>
+            </form>
+          )}
+        </section>
       </main>
     </div>
   );
@@ -1054,6 +1227,7 @@ function RoomCreatePage({
   const [selectedRegion, setSelectedRegion] = useState<string>('서울 신촌·홍대');
   const [selectedUniversity, setSelectedUniversity] = useState<string>('');
   const [intro, setIntro] = useState<string>('');
+  const [agreeRoomRules, setAgreeRoomRules] = useState<boolean>(false);
   const [errorText, setErrorText] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState<boolean>(false);
 
@@ -1093,6 +1267,10 @@ function RoomCreatePage({
     }
     if (selectedUniversity === user.university) {
       setErrorText('상대 대학은 내 소속 대학과 다른 대학교로 선택해 주세요.');
+      return;
+    }
+    if (!agreeRoomRules) {
+      setErrorText('방 개설 이용수칙 및 개인정보 노출 금지 동의 항목에 체크해 주세요.');
       return;
     }
     if (submitting) return;
@@ -1141,7 +1319,7 @@ function RoomCreatePage({
                 value={title}
                 onChange={(e) => setTitle(e.target.value)}
                 placeholder={`예) ${myShort} × ${oppShort} ${format} 저녁 미팅 (비워두면 자동 생성)`}
-                className="w-full border-0 bg-transparent p-0 font-['Noto_Sans_KR',sans-serif] text-[14px] font-normal text-[#0D050A] placeholder:text-[#6E5464] focus:outline-none"
+                className="w-full border-0 bg-transparent p-0 text-[14px] font-normal text-[#0D050A] placeholder:text-[#6E5464] focus:outline-none"
               />
             </div>
           </div>
@@ -1246,7 +1424,7 @@ function RoomCreatePage({
               maxLength={500}
               onChange={(e) => setIntro(e.target.value)}
               placeholder="어떤 미팅을 원하는지, 팀 분위기를 적어 주세요."
-              className="h-[160px] w-full resize-none self-stretch rounded-[8px] border border-[#D8B4C4] bg-[#FFFFFF] p-[14px] font-['Noto_Sans_KR',sans-serif] text-[14px] font-normal leading-[1.45] text-[#0D050A] placeholder:text-[#6E5464] focus:outline-none"
+              className="h-[160px] w-full resize-none self-stretch rounded-[8px] border border-[#D8B4C4] bg-[#FFFFFF] p-[14px] text-[14px] font-normal leading-[1.45] text-[#0D050A] placeholder:text-[#6E5464] focus:outline-none"
             />
             <div className="flex flex-row justify-end self-stretch">
               <span className="text-[13px] font-normal leading-[1.45] text-[#6E5464]">
@@ -1261,10 +1439,24 @@ function RoomCreatePage({
             </div>
           )}
 
-          <div className="flex flex-col items-stretch self-stretch rounded-[8px] bg-[#F7D8E4] px-[16px] py-[14px]">
+          <div className="flex flex-col gap-[10px] self-stretch rounded-[8px] bg-[#F7D8E4] px-[16px] py-[14px]">
             <span className="text-[13px] font-normal leading-[1.45] text-[#4A3842]">
               {`방을 만들면 ${user.university} 첫 자리에 방장으로 들어가요. 상대 대학 자리는 그 대학 인증을 마친 회원만 신청할 수 있어요.`}
             </span>
+            <label className="flex cursor-pointer flex-row items-start gap-[8px] border-t border-[#D8B4C4] pt-[10px] text-[13px] text-[#0D050A]">
+              <input
+                type="checkbox"
+                checked={agreeRoomRules}
+                onChange={(e) => {
+                  setAgreeRoomRules(e.target.checked);
+                  setErrorText(null);
+                }}
+                className="mt-[2px] h-[16px] w-[16px] shrink-0 accent-[#0D050A]"
+              />
+              <span>
+                <strong>[필수]</strong> 타인의 개인정보·연락처 무단 노출 및 불건전 목적이 없으며 이용약관 준수에 동의합니다.
+              </span>
+            </label>
           </div>
 
           <div className="flex flex-row justify-end gap-[12px] self-stretch">
@@ -1317,6 +1509,7 @@ function BoardWritePage({
   const [selectedRegion, setSelectedRegion] = useState<string>('서울 신촌·홍대');
   const [selectedUniversity, setSelectedUniversity] = useState<string>('전체 (상관없음)');
   const [content, setContent] = useState<string>('');
+  const [agreePostRules, setAgreePostRules] = useState<boolean>(false);
   const [errorText, setErrorText] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState<boolean>(false);
 
@@ -1352,6 +1545,10 @@ function BoardWritePage({
     }
     if (!content.trim()) {
       setErrorText('소개 내용을 입력해 주세요.');
+      return;
+    }
+    if (!agreePostRules) {
+      setErrorText('모집글 작성 수칙 및 개인정보 보호 동의 항목에 체크해 주세요.');
       return;
     }
     if (submitting) return;
@@ -1426,7 +1623,7 @@ function BoardWritePage({
                 value={title}
                 onChange={(e) => setTitle(e.target.value)}
                 placeholder="모집글 제목을 입력해 주세요"
-                className="w-full border-0 bg-transparent p-0 font-['Noto_Sans_KR',sans-serif] text-[14px] font-normal text-[#0D050A] placeholder:text-[#6E5464] focus:outline-none"
+                className="w-full border-0 bg-transparent p-0 text-[14px] font-normal text-[#0D050A] placeholder:text-[#6E5464] focus:outline-none"
               />
             </div>
           </div>
@@ -1529,7 +1726,7 @@ function BoardWritePage({
               maxLength={500}
               onChange={(e) => setContent(e.target.value)}
               placeholder="팀 소개, 원하는 분위기 등을 자유롭게 적어 주세요."
-              className="h-[160px] w-full resize-none self-stretch rounded-[8px] border border-[#D8B4C4] bg-[#FFFFFF] p-[14px] font-['Noto_Sans_KR',sans-serif] text-[14px] font-normal leading-[1.45] text-[#0D050A] placeholder:text-[#6E5464] focus:outline-none"
+              className="h-[160px] w-full resize-none self-stretch rounded-[8px] border border-[#D8B4C4] bg-[#FFFFFF] p-[14px] text-[14px] font-normal leading-[1.45] text-[#0D050A] placeholder:text-[#6E5464] focus:outline-none"
             />
             <div className="flex flex-row justify-end self-stretch">
               <span className="text-[13px] font-normal leading-[1.45] text-[#6E5464]">
@@ -1542,10 +1739,24 @@ function BoardWritePage({
             <span className="text-[13px] font-medium text-[#B42318]">{errorText}</span>
           )}
 
-          <div className="flex flex-col items-stretch self-stretch rounded-[8px] bg-[#F7D8E4] px-[16px] py-[14px]">
+          <div className="flex flex-col gap-[10px] self-stretch rounded-[8px] bg-[#F7D8E4] px-[16px] py-[14px]">
             <span className="text-[13px] font-normal leading-[1.45] text-[#4A3842]">
               학교 인증을 마친 사용자만 글을 쓰고 신청할 수 있어요.
             </span>
+            <label className="flex cursor-pointer flex-row items-start gap-[8px] border-t border-[#D8B4C4] pt-[10px] text-[13px] text-[#0D050A]">
+              <input
+                type="checkbox"
+                checked={agreePostRules}
+                onChange={(e) => {
+                  setAgreePostRules(e.target.checked);
+                  setErrorText(null);
+                }}
+                className="mt-[2px] h-[16px] w-[16px] shrink-0 accent-[#0D050A]"
+              />
+              <span>
+                <strong>[필수]</strong> 실명·연락처 등 개인정보 무단 기재 및 허위·광고성 게시물이 아님을 확인하고 동의합니다.
+              </span>
+            </label>
           </div>
 
           <div className="flex flex-row justify-end gap-[12px] self-stretch">
@@ -1780,7 +1991,7 @@ function BoardListPage({
                   setPageNumber(1);
                 }}
                 placeholder="제목, 학교 검색"
-                className="w-full border-0 bg-transparent p-0 font-['Noto_Sans_KR',sans-serif] text-[14px] font-normal text-[#0D050A] placeholder:text-[#6E5464] focus:outline-none"
+                className="w-full border-0 bg-transparent p-0 text-[14px] font-normal text-[#0D050A] placeholder:text-[#6E5464] focus:outline-none"
               />
             </div>
           </div>
@@ -1970,8 +2181,8 @@ function MapPage({
   }, []);
 
   return (
-    <div className="mx-auto flex h-full min-h-0 w-full max-w-[1440px] flex-col overflow-hidden bg-[#FFFFFF]">
-      <main className="flex h-full min-h-0 flex-1 flex-col overflow-hidden self-stretch lg:flex-row">
+    <div className="mx-auto flex h-full min-h-0 w-full max-w-[1440px] flex-1 flex-col overflow-hidden bg-[#FFFFFF]">
+      <main className="flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden self-stretch lg:flex-row">
         <aside className="flex h-[280px] min-h-0 w-full shrink-0 flex-col gap-[14px] overflow-hidden border-b border-[#EBCDD9] bg-[#FFFFFF] p-[24px] lg:h-full lg:w-[400px] lg:border-b-0 lg:border-r">
           <h1 className="m-0 shrink-0 text-[22px] font-bold leading-[1.45] text-[#0D050A]">
             전국 대학 지도
@@ -1984,7 +2195,7 @@ function MapPage({
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               placeholder="전국 453개 대학·지역 검색"
-              className="w-full border-0 bg-transparent p-0 font-['Noto_Sans_KR',sans-serif] text-[14px] font-normal text-[#0D050A] placeholder:text-[#6E5464] focus:outline-none"
+              className="w-full border-0 bg-transparent p-0 text-[14px] font-normal text-[#0D050A] placeholder:text-[#6E5464] focus:outline-none"
             />
           </div>
 
@@ -2021,11 +2232,15 @@ function MapPage({
               const count = recruitingCountByUniv[univ.name] ?? 0;
               const isSelected = univ.id === selectedUniversity.id;
               return (
-                <div
+                <button
                   key={univ.id}
+                  type="button"
+                  aria-pressed={isSelected}
                   onClick={() => handleSelectUniversity(univ.id)}
-                  className={`flex shrink-0 cursor-pointer flex-col gap-[4px] self-stretch rounded-[8px] p-[12px] ${
-                    isSelected ? 'border border-[#0D050A] bg-[#F7D8E4]' : 'bg-transparent'
+                  className={`flex shrink-0 cursor-pointer flex-col gap-[4px] self-stretch rounded-[8px] p-[12px] text-left ${
+                    isSelected
+                      ? 'border border-[#0D050A] bg-[#F7D8E4]'
+                      : 'border border-transparent bg-transparent'
                   }`}
                 >
                   <span className="text-[15px] font-medium leading-[1.45] text-[#0D050A]">
@@ -2034,13 +2249,13 @@ function MapPage({
                   <span className="text-[13px] font-normal leading-[1.45] text-[#6E5464]">
                     {`${univ.region} · 모집 중인 방 ${count}개`}
                   </span>
-                </div>
+                </button>
               );
             })}
           </div>
         </aside>
 
-        <section className="relative h-full min-h-0 flex-1 overflow-hidden bg-[#FBEBF1]">
+        <section className="relative h-full min-h-0 min-w-0 flex-1 overflow-hidden bg-[#FBEBF1]">
           <NaverUniversityMap
             universities={filteredUniversities.length > 0 ? filteredUniversities : UNIVERSITIES_GEO}
             recruitingCountByUniv={recruitingCountByUniv}
@@ -2104,6 +2319,7 @@ function MapPage({
           >
             <button
               type="button"
+              aria-label="지도 확대"
               onClick={() => {
                 if (zoomLevel >= MAP_MAX_ZOOM) {
                   onShowToast('max-zoom');
@@ -2113,10 +2329,13 @@ function MapPage({
               }}
               className="flex h-[40px] w-[40px] cursor-pointer flex-row items-center justify-center border-0 bg-transparent p-0"
             >
-              <span className="text-[18px] font-medium leading-[1.45] text-[#4A3842]">+</span>
+              <span aria-hidden="true" className="text-[18px] font-medium leading-[1.45] text-[#4A3842]">
+                +
+              </span>
             </button>
             <button
               type="button"
+              aria-label="지도 축소"
               onClick={() => {
                 if (zoomLevel <= MAP_MIN_ZOOM) {
                   onShowToast('min-zoom');
@@ -2126,7 +2345,9 @@ function MapPage({
               }}
               className="flex h-[40px] w-[40px] cursor-pointer flex-row items-center justify-center border-0 bg-transparent p-0"
             >
-              <span className="text-[18px] font-medium leading-[1.45] text-[#4A3842]">−</span>
+              <span aria-hidden="true" className="text-[18px] font-medium leading-[1.45] text-[#4A3842]">
+                −
+              </span>
             </button>
           </div>
         </section>
@@ -2211,12 +2432,13 @@ function RoomDetailPage({
   return (
     <div className="mx-auto flex w-full max-w-[1440px] flex-col bg-[#FFFFFF]">
       <main className="flex flex-col gap-[24px] self-stretch px-5 py-[40px] md:px-12 xl:px-[120px]">
-        <div
+        <button
+          type="button"
           onClick={() => onNavigate('rooms')}
-          className="w-fit cursor-pointer whitespace-pre text-[14px] font-normal leading-[1.45] text-[#6E5464]"
+          className="w-fit cursor-pointer border-0 bg-transparent p-0 text-left whitespace-pre text-[14px] font-normal leading-[1.45] text-[#6E5464] hover:underline"
         >
           {`미팅 방   >   ${room.leftUniversity.shortName} × ${room.rightUniversity.shortName} ${room.format}`}
-        </div>
+        </button>
 
         <div className="flex flex-col items-start gap-[32px] self-stretch lg:flex-row">
           <div className="flex w-full flex-1 flex-col items-stretch gap-[36px]">
@@ -2296,8 +2518,9 @@ function RoomDetailPage({
                       ))}
 
                       {Array.from({ length: team.emptySlotsCount }).map((_, idx) => (
-                        <div
+                        <button
                           key={`${team.id}-empty-${idx}`}
+                          type="button"
                           onClick={() => {
                             if (!user || !isStudentVerified(user)) {
                               onToggleJoin(room);
@@ -2312,12 +2535,12 @@ function RoomDetailPage({
                               onToggleJoin(room);
                             }
                           }}
-                          className="flex h-[40px] cursor-pointer flex-row items-center justify-center self-stretch rounded-[8px] border border-dashed border-[#D8B4C4] px-[12px] py-[10px]"
+                          className="flex h-[40px] cursor-pointer flex-row items-center justify-center self-stretch rounded-[8px] border border-dashed border-[#D8B4C4] bg-transparent px-[12px] py-[10px]"
                         >
                           <span className="text-[14px] font-normal leading-[1.45] text-[#6E5464]">
                             {`빈 자리 · ${team.gender}`}
                           </span>
-                        </div>
+                        </button>
                       ))}
                     </div>
                   );
@@ -2674,7 +2897,7 @@ function MeetingRoomsPage({
                 setPageNumber(1);
               }}
               placeholder="대학 이름으로 검색"
-              className="w-full border-0 bg-transparent p-0 font-['Noto_Sans_KR',sans-serif] text-[14px] font-normal text-[#0D050A] placeholder:text-[#6E5464] focus:outline-none"
+              className="w-full border-0 bg-transparent p-0 text-[14px] font-normal text-[#0D050A] placeholder:text-[#6E5464] focus:outline-none"
             />
           </div>
         </div>
@@ -2690,7 +2913,7 @@ function MeetingRoomsPage({
             ))}
           </div>
         ) : rooms.length === 0 ? (
-          <div className="flex flex-col items-center gap-[12px] rounded-[12px] border border-[#EBCDD9] bg-[#FBEBF1] py-[64px] text-center">
+          <div className="flex flex-col items-center gap-[12px] py-[72px] text-center">
             <span className="text-[17px] font-bold text-[#0D050A]">
               아직 개설된 미팅 방이 없어요
             </span>
@@ -2706,7 +2929,7 @@ function MeetingRoomsPage({
             </button>
           </div>
         ) : (
-          <div className="flex flex-col items-center gap-[12px] rounded-[12px] border border-[#EBCDD9] py-[64px]">
+          <div className="flex flex-col items-center gap-[12px] py-[72px] text-center">
             <span className="text-[15px] text-[#6E5464]">
               선택한 조건에 맞는 미팅 방이 없어요.
             </span>
@@ -2754,267 +2977,20 @@ function MeetingRoomsPage({
   );
 }
 
-function HomePage({
-  rooms,
-  user,
-  onSelectRoom,
-  onRequestCreateRoom,
-  onOpenMapWithUniversity,
-  onNavigate,
-  onOpenOverlay,
-}: {
-  rooms: MeetingRoom[];
-  user: UserProfile | null;
-  onSelectRoom: (roomId: string) => void;
-  onRequestCreateRoom: () => void;
-  onOpenMapWithUniversity: (univId: string) => void;
-  onNavigate: (page: PageId) => void;
-  onOpenOverlay: (overlay: ActiveOverlayState) => void;
-}) {
-  const defaultPreviewUniv = useMemo(() => {
-    if (user?.university) {
-      const m = UNIVERSITIES_GEO.find((u) => u.name === user.university);
-      if (m) return m;
-    }
-    return DEFAULT_FOCUS_UNIV;
-  }, [user]);
-
-  const [previewUnivId, setPreviewUnivId] = useState<string>(defaultPreviewUniv.id);
-  const [previewZoom, setPreviewZoom] = useState<number>(MAP_DEFAULT_ZOOM);
-
-  const recruitingRooms = useMemo(
-    () => rooms.filter((r) => r.status === '모집 중'),
-    [rooms]
-  );
-  const previewRooms = useMemo(() => recruitingRooms.slice(0, 4), [recruitingRooms]);
-
-  const recruitingCountByUniv = useMemo(() => {
-    const counts: Record<string, number> = {};
-    recruitingRooms.forEach((room) => {
-      counts[room.leftUniversity.name] = (counts[room.leftUniversity.name] ?? 0) + 1;
-      counts[room.rightUniversity.name] = (counts[room.rightUniversity.name] ?? 0) + 1;
-    });
-    return counts;
-  }, [recruitingRooms]);
-
-  return (
-    <div className="mx-auto flex w-full max-w-[1440px] flex-col bg-[#FFFFFF]">
-      <section className="flex flex-col items-center gap-[48px] self-stretch bg-[#F7D8E4] px-5 py-[64px] md:px-12 lg:flex-row lg:gap-[80px] lg:py-[80px] xl:px-[120px]">
-        <div className="flex flex-1 flex-col gap-[24px]">
-          <h1 className="m-0 whitespace-pre-line text-[36px] font-bold leading-[1.45] text-[#0D050A] sm:text-[44px]">
-            {'주선자 없이,\n다른 대학 학생과 미팅'}
-          </h1>
-          <p className="m-0 whitespace-pre-line text-[17px] font-normal leading-[1.45] text-[#4A3842] sm:text-[18px]">
-            {
-              '내 대학이 포함된 방에 바로 참여하거나, 원하는 대학과의 방을 직접 만들어 보세요.\n학기 중 언제든, 전국 453개 캠퍼스 어디서든.'
-            }
-          </p>
-          <div className="flex flex-row flex-wrap gap-[12px]">
-            <button
-              type="button"
-              onClick={() => onNavigate('rooms')}
-              className="flex cursor-pointer flex-row items-center justify-center rounded-[8px] border-0 bg-[#0D050A] px-[20px] py-[12px]"
-            >
-              <span className="text-[15px] font-medium text-[#FFFFFF]">미팅 방 둘러보기</span>
-            </button>
-            <button
-              type="button"
-              onClick={onRequestCreateRoom}
-              className="flex cursor-pointer flex-row items-center justify-center rounded-[8px] border border-[#D8B4C4] bg-[#FFFFFF] px-[20px] py-[12px]"
-            >
-              <span className="text-[15px] font-medium text-[#0D050A]">방 만들기</span>
-            </button>
-          </div>
-        </div>
-
-        <div className="flex h-[360px] w-full max-w-[520px] shrink-0 flex-col items-center justify-center rounded-[12px] bg-[#FBEBF1] lg:w-[520px]">
-          <span className="text-[15px] font-medium leading-[1.45] text-[#6E5464]">메인 비주얼</span>
-        </div>
-      </section>
-
-      <section className="flex flex-col gap-[24px] self-stretch px-5 py-[72px] md:px-12 xl:px-[120px]">
-        <h2 className="m-0 text-[26px] font-bold leading-[1.45] text-[#0D050A]">이렇게 진행돼요</h2>
-        <div className="grid grid-cols-1 gap-[24px] self-stretch sm:grid-cols-2 lg:grid-cols-4">
-          {STEP_ITEMS.map((item) => (
-            <div
-              key={item.id}
-              onClick={
-                item.id === '4:34'
-                  ? () => onNavigate('school-auth')
-                  : item.id === '4:38'
-                    ? () => onNavigate('rooms')
-                    : undefined
-              }
-              className={`flex flex-col gap-[10px] rounded-[12px] border border-[#EBCDD9] p-[24px] ${
-                item.id === '4:34' || item.id === '4:38' ? 'cursor-pointer' : ''
-              }`}
-            >
-              <span className="text-[13px] font-bold leading-[1.45] text-[#6E5464]">
-                {item.step}
-              </span>
-              <span className="text-[19px] font-bold leading-[1.45] text-[#0D050A]">
-                {item.title}
-              </span>
-              <p className="m-0 text-[14px] font-normal leading-[1.45] text-[#4A3842]">
-                {item.description}
-              </p>
-            </div>
-          ))}
-        </div>
-      </section>
-
-      <section className="flex flex-col gap-[24px] self-stretch px-5 py-[24px] md:px-12 xl:px-[120px]">
-        <div className="flex flex-row items-center justify-between self-stretch">
-          <h2 className="m-0 text-[26px] font-bold leading-[1.45] text-[#0D050A]">
-            지금 모집 중인 방
-          </h2>
-          <a
-            href="#all-rooms"
-            onClick={(e) => {
-              e.preventDefault();
-              onNavigate('rooms');
-            }}
-            className="text-[15px] font-medium leading-[1.45] text-[#4A3842] no-underline"
-          >
-            {'전체 보기 >'}
-          </a>
-        </div>
-
-        {previewRooms.length > 0 ? (
-          <div className="flex flex-row flex-wrap gap-[24px]">
-            {previewRooms.map((room) => (
-              <RoomCard
-                key={room.id}
-                room={room}
-                onSelect={() => onSelectRoom(room.id)}
-              />
-            ))}
-          </div>
-        ) : (
-          <div className="flex flex-col items-center gap-[12px] rounded-[16px] border border-[#EBCDD9] bg-[#FBEBF1] px-[24px] py-[56px] text-center">
-            <span className="text-[18px] font-bold text-[#0D050A]">
-              지금 첫 번째 미팅 방을 열어 보세요
-            </span>
-            <p className="m-0 text-[14px] text-[#4A3842]">
-              학교 인증을 완료하면 전국 453개 캠퍼스 중 원하는 상대 대학과 바로 미팅 방을 개설할 수 있어요.
-            </p>
-            <button
-              type="button"
-              onClick={onRequestCreateRoom}
-              className="mt-2 cursor-pointer rounded-[8px] border-0 bg-[#0D050A] px-[20px] py-[12px] text-[15px] font-medium text-[#FFFFFF]"
-            >
-              + 첫 미팅 방 만들기
-            </button>
-          </div>
-        )}
-      </section>
-
-      <section className="flex flex-col items-stretch self-stretch px-5 py-[72px] md:px-12 xl:px-[120px]">
-        <div className="flex flex-col items-center gap-[32px] self-stretch rounded-[16px] border border-[#EBCDD9] p-6 sm:p-[40px] lg:flex-row lg:gap-[48px]">
-          <div className="flex flex-1 flex-col items-start gap-[16px]">
-            <h2 className="m-0 whitespace-pre-line text-[26px] font-bold leading-[1.45] text-[#0D050A]">
-              {'전국 453개 대학을\n지도에서 찾아보세요'}
-            </h2>
-            <p className="m-0 whitespace-pre-line text-[16px] font-normal leading-[1.45] text-[#4A3842]">
-              {'학교별 모집 중인 방과 전국 캠퍼스 위치를\n네이버 지도에서 한눈에 볼 수 있어요.'}
-            </p>
-            <button
-              type="button"
-              onClick={() => onNavigate('map')}
-              className="flex cursor-pointer flex-row items-center justify-center rounded-[8px] border-0 bg-[#0D050A] px-[20px] py-[12px]"
-            >
-              <span className="text-[15px] font-medium text-[#FFFFFF]">지도 열기</span>
-            </button>
-          </div>
-
-          <div className="relative h-[260px] w-full shrink-0 overflow-hidden rounded-[12px] border border-[#EBCDD9] bg-[#FBEBF1] lg:w-[720px]">
-            <NaverUniversityMap
-              universities={UNIVERSITIES_GEO}
-              recruitingCountByUniv={recruitingCountByUniv}
-              selectedUniversityId={previewUnivId}
-              zoomLevel={previewZoom}
-              onSelectUniversity={(univId) => {
-                setPreviewUnivId(univId);
-                onOpenMapWithUniversity(univId);
-              }}
-              onZoomChange={setPreviewZoom}
-              compact
-            />
-
-            <div className="absolute bottom-[12px] right-[12px] z-10 flex flex-col rounded-[8px] border border-[#D8B4C4] bg-[#FFFFFF] shadow-[0_2px_8px_rgba(13,5,10,0.08)]">
-              <button
-                type="button"
-                onClick={() =>
-                  setPreviewZoom((prev) => Math.min(MAP_MAX_ZOOM, prev + 1))
-                }
-                className="flex h-[32px] w-[32px] cursor-pointer items-center justify-center border-0 bg-transparent p-0 text-[16px] font-medium text-[#4A3842]"
-              >
-                +
-              </button>
-              <button
-                type="button"
-                onClick={() =>
-                  setPreviewZoom((prev) => Math.max(MAP_MIN_ZOOM, prev - 1))
-                }
-                className="flex h-[32px] w-[32px] cursor-pointer items-center justify-center border-0 bg-transparent p-0 text-[16px] font-medium text-[#4A3842]"
-              >
-                −
-              </button>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      <footer className="flex flex-col gap-[8px] self-stretch bg-[#F7D8E4] px-5 py-[40px] md:px-12 xl:px-[120px]">
-        <span className="text-[16px] font-bold leading-[1.45] text-[#4A3842]">대학미팅</span>
-        <div className="flex flex-row flex-wrap items-center gap-[6px]">
-          {FOOTER_LINKS.map((link, index) => (
-            <React.Fragment key={link}>
-              {index > 0 && (
-                <span className="text-[13px] font-normal leading-[1.45] text-[#6E5464]">·</span>
-              )}
-              <a
-                href={`#${link}`}
-                onClick={(e) => {
-                  e.preventDefault();
-                  if (link === '이용약관') {
-                    onOpenOverlay({ id: 'terms' });
-                  } else if (link === '개인정보처리방침') {
-                    onOpenOverlay({ id: 'privacy' });
-                  } else if (link === '신고 센터') {
-                    onOpenOverlay({
-                      id: 'report',
-                      reportTarget: { targetType: 'general' },
-                    });
-                  } else if (link === '문의하기') {
-                    onOpenOverlay({ id: 'inquiry' });
-                  }
-                }}
-                className="text-[13px] font-normal leading-[1.45] text-[#6E5464] no-underline"
-              >
-                {link}
-              </a>
-            </React.Fragment>
-          ))}
-        </div>
-      </footer>
-    </div>
-  );
-}
-
 export function App() {
   const initialRoute = useMemo(() => readInitialRouteFromUrl(), []);
 
   const [currentPage, setCurrentPage] = useState<PageId>(initialRoute.page);
   const [user, setUser] = useState<UserProfile | null>(() => loadCachedCurrentUser());
-  const [allUsers, setAllUsers] = useState<UserProfile[]>(() => loadAllLocalUsers());
+  const [allUsers, setAllUsers] = useState<UserProfile[]>([]);
   const [rooms, setRooms] = useState<MeetingRoom[]>(() => loadLocalRooms());
   const [posts, setPosts] = useState<BoardPost[]>(() => loadLocalPosts());
-  const [verificationRequests, setVerificationRequests] = useState<VerificationRequest[]>(() =>
-    loadLocalVerificationRequests()
-  );
-  const [reports, setReports] = useState<ReportRecord[]>(() => loadLocalReports());
-  const [inquiries, setInquiries] = useState<InquiryRecord[]>(() => loadLocalInquiries());
+  const [verificationRequests, setVerificationRequests] = useState<VerificationRequest[]>([]);
+  const [ownVerificationRequest, setOwnVerificationRequest] = useState<
+    VerificationRequest | undefined
+  >(undefined);
+  const [reports, setReports] = useState<ReportRecord[]>([]);
+  const [inquiries, setInquiries] = useState<InquiryRecord[]>([]);
 
   const [selectedRoomId, setSelectedRoomId] = useState<string>(initialRoute.roomId);
   const [selectedPostId, setSelectedPostId] = useState<string>(initialRoute.postId);
@@ -3028,6 +3004,7 @@ export function App() {
   const scrollContainerRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
+    window.scrollTo({ top: 0 });
     scrollContainerRef.current?.scrollTo({ top: 0 });
   }, [currentPage]);
 
@@ -3063,28 +3040,57 @@ export function App() {
     return () => window.removeEventListener('popstate', handlePopState);
   }, []);
 
+  // 공용 데이터(방, 게시글) 및 인증 상태만 기본 구독
   useEffect(() => {
     const unsubAuth = subscribeAuthAndProfile(setUser);
     const unsubRooms = subscribeRooms(setRooms);
     const unsubPosts = subscribePosts(setPosts);
-    const unsubVerify = subscribeVerificationRequests(setVerificationRequests);
-    const unsubReports = subscribeReports(setReports);
-    const unsubInquiries = subscribeInquiries(setInquiries);
     return () => {
       unsubAuth();
       unsubRooms();
       unsubPosts();
+    };
+  }, []);
+
+  // 일반 재학생은 오직 '본인 단건' 인증 신청 내역만 구독 (타인 재학증명서 접근 원천 차단)
+  useEffect(() => {
+    if (!user || user.isAdmin) {
+      setOwnVerificationRequest(undefined);
+      return;
+    }
+    const unsubMyVerif = subscribeMyVerificationRequest(
+      user.uid,
+      setOwnVerificationRequest
+    );
+    return () => unsubMyVerif();
+  }, [user]);
+
+  // 민감 관리자 컬렉션(전체 회원·재학증명서·신고·문의)은 관리자 인증 완료 시에만 구독!
+  useEffect(() => {
+    if (!user?.isAdmin) {
+      setAllUsers([]);
+      setVerificationRequests([]);
+      setReports([]);
+      setInquiries([]);
+      return;
+    }
+    const unsubUsers = subscribeAllUsers(setAllUsers);
+    const unsubVerify = subscribeVerificationRequests(setVerificationRequests);
+    const unsubReports = subscribeReports(setReports);
+    const unsubInquiries = subscribeInquiries(setInquiries);
+    return () => {
+      unsubUsers();
       unsubVerify();
       unsubReports();
       unsubInquiries();
     };
-  }, []);
-
-  useEffect(() => {
-    if (!user?.isAdmin) return;
-    const unsubUsers = subscribeAllUsers(setAllUsers);
-    return () => unsubUsers();
   }, [user?.isAdmin]);
+
+  // 관리자 로그인 상태에서 기존 승인된 인증 신청서가 users 문서에 누락되어 있을 경우 자동 복구
+  useEffect(() => {
+    if (!user?.isAdmin || verificationRequests.length === 0) return;
+    void repairApprovedUsersInFirestore(verificationRequests, allUsers);
+  }, [user?.isAdmin, verificationRequests, allUsers]);
 
   const showToast = useCallback((toastId: ToastId, customMessage?: string) => {
     setToastMessage(customMessage ?? TOAST_MESSAGES[toastId]);
@@ -3187,26 +3193,40 @@ export function App() {
         requireVerifiedStudent('방을 생성');
         return;
       }
-      const { room, nextRooms } = await createMeetingRoom(
-        { ...payload, host: user },
-        rooms
-      );
-      setRooms(nextRooms);
-      setSelectedRoomId(room.id);
-      setCurrentPage('room-detail');
-      showToast('copy-link', '새 미팅 방을 만들었어요');
+      try {
+        const { room, nextRooms } = await createMeetingRoom(
+          { ...payload, host: user },
+          rooms
+        );
+        setRooms(nextRooms);
+        setSelectedRoomId(room.id);
+        setCurrentPage('room-detail');
+        showToast('copy-link', '새 미팅 방을 만들었어요');
+      } catch (err) {
+        showToast(
+          'report',
+          err instanceof Error ? err.message : '방 생성 중 오류가 발생했어요.'
+        );
+      }
     },
     [rooms, user, requireVerifiedStudent, showToast]
   );
 
   const handleDeleteRoom = useCallback(
     async (roomId: string) => {
-      const next = await deleteMeetingRoom(roomId, rooms);
-      setRooms(next);
-      setCurrentPage('rooms');
-      showToast('copy-link', '미팅 방을 삭제했어요');
+      try {
+        const next = await deleteMeetingRoom(roomId, rooms, user);
+        setRooms(next);
+        setCurrentPage('rooms');
+        showToast('copy-link', '미팅 방을 삭제했어요');
+      } catch (err) {
+        showToast(
+          'report',
+          err instanceof Error ? err.message : '방 삭제 권한이 없어요.'
+        );
+      }
     },
-    [rooms, showToast]
+    [rooms, user, showToast]
   );
 
   const handleToggleRoomJoin = useCallback(
@@ -3257,39 +3277,60 @@ export function App() {
         requireVerifiedStudent('모집글을 작성');
         return;
       }
-      const { post, nextPosts } = await createBoardPost(
-        { ...payload, author: user },
-        posts
-      );
-      setPosts(nextPosts);
-      setBoardTab(post.tab);
-      setSelectedPostId(post.id);
-      setCurrentPage('board-detail');
-      showToast('copy-link', '모집글을 등록했어요');
+      try {
+        const { post, nextPosts } = await createBoardPost(
+          { ...payload, author: user },
+          posts
+        );
+        setPosts(nextPosts);
+        setBoardTab(post.tab);
+        setSelectedPostId(post.id);
+        setCurrentPage('board-detail');
+        showToast('copy-link', '모집글을 등록했어요');
+      } catch (err) {
+        showToast(
+          'report',
+          err instanceof Error ? err.message : '모집글 등록 중 오류가 발생했어요.'
+        );
+      }
     },
     [posts, user, requireVerifiedStudent, showToast]
   );
 
   const handleTogglePostStatus = useCallback(
     async (post: BoardPost) => {
-      const next = await toggleBoardPostStatus(post, posts);
-      setPosts(next);
-      showToast(
-        'copy-link',
-        post.status === '모집 중' ? '모집을 마감했어요' : '다시 모집 중으로 변경했어요'
-      );
+      try {
+        const next = await toggleBoardPostStatus(post, posts, user);
+        setPosts(next);
+        showToast(
+          'copy-link',
+          post.status === '모집 중' ? '모집을 마감했어요' : '다시 모집 중으로 변경했어요'
+        );
+      } catch (err) {
+        showToast(
+          'report',
+          err instanceof Error ? err.message : '상태 변경 권한이 없어요.'
+        );
+      }
     },
-    [posts, showToast]
+    [posts, user, showToast]
   );
 
   const handleDeletePost = useCallback(
     async (postId: string) => {
-      const next = await deleteBoardPost(postId, posts);
-      setPosts(next);
-      setCurrentPage('board');
-      showToast('copy-link', '모집글을 삭제했어요');
+      try {
+        const next = await deleteBoardPost(postId, posts, user);
+        setPosts(next);
+        setCurrentPage('board');
+        showToast('copy-link', '모집글을 삭제했어요');
+      } catch (err) {
+        showToast(
+          'report',
+          err instanceof Error ? err.message : '삭제 권한이 없어요.'
+        );
+      }
     },
-    [posts, showToast]
+    [posts, user, showToast]
   );
 
   const handleTogglePostApply = useCallback(
@@ -3329,10 +3370,7 @@ export function App() {
         ...payload,
       });
       setUser(updatedUser);
-      setVerificationRequests((prev) => [
-        request,
-        ...prev.filter((r) => r.uid !== request.uid),
-      ]);
+      setOwnVerificationRequest(request);
       showToast('auth-mail', '인증 심사를 요청했어요. 운영팀 승인 후 이용 가능해요.');
     },
     [user, showToast]
@@ -3340,38 +3378,56 @@ export function App() {
 
   const handleApproveVerification = useCallback(
     async (req: VerificationRequest) => {
-      const next = await reviewVerificationRequest(req, 'approved');
-      setVerificationRequests(next);
-      if (user && user.uid === req.uid) {
-        setUser({
-          ...user,
-          university: req.university,
-          department: req.department,
-          studentId: req.studentId,
-          studentYear: req.studentYear,
-          verified: true,
-          verificationStatus: 'approved',
-          rejectionReason: '',
-        });
+      try {
+        const next = await reviewVerificationRequest(req, 'approved');
+        setVerificationRequests(next);
+        if (user && user.uid === req.uid) {
+          setUser({
+            ...user,
+            university: req.university,
+            department: req.department,
+            studentId: req.studentId,
+            studentYear: req.studentYear,
+            verified: true,
+            verificationStatus: 'approved',
+            rejectionReason: '',
+          });
+        }
+        showToast('auth-mail', `${req.userName}님의 ${req.university} 인증을 승인했어요.`);
+      } catch (err) {
+        showToast(
+          'report',
+          err instanceof Error
+            ? `승인 저장 실패: ${err.message}`
+            : '인증 승인 처리 중 서버 권한 오류가 발생했어요.'
+        );
       }
-      showToast('auth-mail', `${req.userName}님의 ${req.university} 인증을 승인했어요.`);
     },
     [user, showToast]
   );
 
   const handleRejectVerification = useCallback(
     async (req: VerificationRequest, reason: string) => {
-      const next = await reviewVerificationRequest(req, 'rejected', reason);
-      setVerificationRequests(next);
-      if (user && user.uid === req.uid) {
-        setUser({
-          ...user,
-          verified: false,
-          verificationStatus: 'rejected',
-          rejectionReason: reason,
-        });
+      try {
+        const next = await reviewVerificationRequest(req, 'rejected', reason);
+        setVerificationRequests(next);
+        if (user && user.uid === req.uid) {
+          setUser({
+            ...user,
+            verified: false,
+            verificationStatus: 'rejected',
+            rejectionReason: reason,
+          });
+        }
+        showToast('report', `${req.userName}님의 인증 요청을 반려 처리했어요.`);
+      } catch (err) {
+        showToast(
+          'report',
+          err instanceof Error
+            ? `반려 저장 실패: ${err.message}`
+            : '반려 처리 중 서버 권한 오류가 발생했어요.'
+        );
       }
-      showToast('report', `${req.userName}님의 인증 요청을 반려 처리했어요.`);
     },
     [user, showToast]
   );
@@ -3385,18 +3441,27 @@ export function App() {
 
   const handleDirectSetUserVerification = useCallback(
     async (targetUser: UserProfile, decision: 'approved' | 'unverified') => {
-      const updated = await setUserVerificationByAdmin(targetUser, decision);
-      setAllUsers((prev) => {
-        const filtered = prev.filter((u) => u.uid !== updated.uid);
-        return [updated, ...filtered];
-      });
-      setVerificationRequests(loadLocalVerificationRequests());
-      showToast(
-        'auth-mail',
-        decision === 'approved'
-          ? `${updated.name}님의 ${updated.university} 인증을 승인했어요.`
-          : `${updated.name}님의 학교 인증을 해제했어요.`
-      );
+      try {
+        const updated = await setUserVerificationByAdmin(targetUser, decision);
+        setAllUsers((prev) => {
+          const filtered = prev.filter((u) => u.uid !== updated.uid);
+          return [updated, ...filtered];
+        });
+        setVerificationRequests(loadLocalVerificationRequests());
+        showToast(
+          'auth-mail',
+          decision === 'approved'
+            ? `${updated.name}님의 ${updated.university} 인증을 승인했어요.`
+            : `${updated.name}님의 학교 인증을 해제했어요.`
+        );
+      } catch (err) {
+        showToast(
+          'report',
+          err instanceof Error
+            ? `상태 변경 실패: ${err.message}`
+            : '학교 인증 상태 저장 중 서버 권한 오류가 발생했어요.'
+        );
+      }
     },
     [showToast]
   );
@@ -3416,21 +3481,61 @@ export function App() {
   );
 
   const handleSubmitInquiry = useCallback(
-    (content: string) => {
+    (content: string, overrideEmail?: string) => {
       void submitInquiry({
         content,
         userUid: user?.uid ?? 'guest',
-        email: user?.email ?? '',
+        email: overrideEmail ?? user?.email ?? '',
         createdAt: Date.now(),
       });
     },
     [user]
   );
 
-  const myVerificationRequest = useMemo(
-    () => (user ? verificationRequests.find((r) => r.uid === user.uid) : undefined),
-    [verificationRequests, user]
+  const handleDeleteVerificationOnly = useCallback(async () => {
+    if (!user) return;
+    const updated = await deleteMyVerificationData(user);
+    setUser(updated);
+    setOwnVerificationRequest(undefined);
+    showToast('copy-link', '재학증명서 원본과 학번 정보가 서버에서 즉시 파기되었어요.');
+  }, [user, showToast]);
+
+  const handleWithdrawAccount = useCallback(
+    async (password: string) => {
+      if (!user) return;
+      const { nextRooms, nextPosts } = await withdrawUserAccount(
+        user,
+        password,
+        rooms,
+        posts
+      );
+      setRooms(nextRooms);
+      setPosts(nextPosts);
+      setUser(null);
+      setOwnVerificationRequest(undefined);
+      setCurrentPage('home');
+      showToast('copy-link', '회원탈퇴 및 모든 개인정보 영구 파기가 완료되었어요.');
+    },
+    [user, rooms, posts, showToast]
   );
+
+  const handleAdminPurgeUser = useCallback(
+    async (targetUser: UserProfile) => {
+      const { nextRooms, nextPosts } = await deleteUserDataByAdmin(
+        targetUser.uid,
+        rooms,
+        posts
+      );
+      setRooms(nextRooms);
+      setPosts(nextPosts);
+      setAllUsers((prev) => prev.filter((u) => u.uid !== targetUser.uid));
+      setVerificationRequests((prev) => prev.filter((r) => r.uid !== targetUser.uid));
+      showToast('copy-link', `${targetUser.name}님의 개인정보 및 게시물을 모두 파기했어요.`);
+    },
+    [rooms, posts, showToast]
+  );
+
+  const myVerificationRequest = ownVerificationRequest;
 
   const isAdminAccess = Boolean(user?.isAdmin);
   const selectedRoom = rooms.find((r) => r.id === selectedRoomId);
@@ -3451,10 +3556,38 @@ export function App() {
           onApprove={handleApproveVerification}
           onReject={handleRejectVerification}
           onDirectSetUserVerification={handleDirectSetUserVerification}
+          onPurgeUserData={handleAdminPurgeUser}
           onDeleteRoom={handleDeleteRoom}
           onTogglePostStatus={handleTogglePostStatus}
           onDeletePost={handleDeletePost}
           onLogout={handleLogout}
+        />
+        <ToastOverlay message={toastMessage} onDismiss={dismissToast} />
+      </>
+    );
+  }
+
+  // 홈(V2 랜딩)은 daehak-meeting-share/daehak-meeting/src/pages/V2.tsx 기반 독립 헤더·스크롤로 렌더링
+  if (currentPage === 'home' || currentPage === 'admin') {
+    return (
+      <>
+        <HomeV2
+          realRooms={rooms}
+          univCount={UNIVERSITIES_GEO.length}
+          onSelectRoom={handleSelectRoom}
+          onNavigate={setCurrentPage}
+          onRequestCreateRoom={handleRequestCreateRoom}
+          onOpenOverlay={openOverlay}
+        />
+        <CookieConsentBanner onOpenOverlay={openOverlay} />
+        <OverlayModal
+          overlay={activeOverlay}
+          defaultEmail={user?.email}
+          onClose={closeOverlay}
+          onNavigate={setCurrentPage}
+          onShowToast={showToast}
+          onSubmitReport={handleSubmitReport}
+          onSubmitInquiry={handleSubmitInquiry}
         />
         <ToastOverlay message={toastMessage} onDismiss={dismissToast} />
       </>
@@ -3482,7 +3615,7 @@ export function App() {
             return;
           }
           showToast('copy-link', `${loggedInUser.name}님 반가워요!`);
-          setCurrentPage(isStudentVerified(loggedInUser) ? 'home' : 'school-auth');
+          setCurrentPage(isStudentVerified(loggedInUser) ? 'rooms' : 'school-auth');
         }}
         onNavigate={setCurrentPage}
       />
@@ -3510,21 +3643,6 @@ export function App() {
         user={user}
         myRequest={myVerificationRequest}
         onSubmitVerification={handleSubmitVerification}
-        onNavigate={setCurrentPage}
-        onOpenOverlay={openOverlay}
-      />
-    );
-  } else if (currentPage === 'home' || currentPage === 'admin') {
-    pageView = (
-      <HomePage
-        rooms={rooms}
-        user={user}
-        onSelectRoom={handleSelectRoom}
-        onRequestCreateRoom={handleRequestCreateRoom}
-        onOpenMapWithUniversity={(univId) => {
-          setMapInitialUnivId(univId);
-          setCurrentPage('map');
-        }}
         onNavigate={setCurrentPage}
         onOpenOverlay={openOverlay}
       />
@@ -3620,32 +3738,56 @@ export function App() {
         onSelectPost={handleSelectPost}
         onRequestCreateRoom={handleRequestCreateRoom}
         onRequestWritePost={handleRequestWritePost}
+        onDeleteVerificationOnly={handleDeleteVerificationOnly}
+        onWithdrawAccount={handleWithdrawAccount}
+        onOpenOverlay={openOverlay}
         onNavigate={setCurrentPage}
       />
     );
   }
 
   return (
-    <div className="flex h-screen w-full flex-col overflow-hidden bg-[#FFFFFF] font-['Noto_Sans_KR',sans-serif]">
-      {/* 상단 고정 GNB */}
-      <div className="z-30 w-full shrink-0 border-b border-[#EBCDD9] bg-[#FFFFFF]">
+    <div className="flex h-screen w-full flex-col overflow-hidden bg-[#FFFFFF]">
+      {/* 키보드 전용 이동자를 위한 본문 바로가기 스킵 링크 */}
+      <a
+        href="#page-main"
+        className="sr-only z-50 rounded-[8px] bg-[#F7C1D4] px-[16px] py-[10px] text-[14px] font-bold text-[#0D050A] focus:not-sr-only focus:fixed focus:left-[16px] focus:top-[12px]"
+      >
+        본문으로 건너뛰기
+      </a>
+
+      {/* 상단 고정 GNB (홈과 통일감을 주는 다크 테마) */}
+      <div className="z-30 w-full shrink-0 border-b border-[#FFFFFF]/14 bg-[#0D050A]">
         <div className="mx-auto w-full max-w-[1440px]">{gnbElement}</div>
       </div>
 
       {/* 하단 독립 스크롤 본문 (지도 탭에서는 외부 스크롤 잠금, 대학 목록만 내부 스크롤) */}
       <div
+        id="page-main"
+        tabIndex={-1}
         ref={scrollContainerRef}
         className={
           currentPage === 'map'
             ? 'flex min-h-0 flex-1 flex-col overflow-hidden'
-            : 'flex-1 overflow-x-hidden overflow-y-auto'
+            : 'flex flex-1 flex-col overflow-x-hidden overflow-y-auto'
         }
       >
-        {pageView}
+        <div
+          className={
+            currentPage === 'map'
+              ? 'flex h-full min-h-0 w-full flex-1 flex-col'
+              : 'flex-1'
+          }
+        >
+          {pageView}
+        </div>
+        {currentPage !== 'map' && <SubpageLegalFooter onOpenOverlay={openOverlay} />}
       </div>
 
+      <CookieConsentBanner onOpenOverlay={openOverlay} />
       <OverlayModal
         overlay={activeOverlay}
+        defaultEmail={user?.email}
         onClose={closeOverlay}
         onNavigate={setCurrentPage}
         onShowToast={showToast}

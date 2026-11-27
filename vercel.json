@@ -1,4 +1,31 @@
 {
+  "headers": [
+    {
+      "source": "/(.*)",
+      "headers": [
+        {
+          "key": "X-Frame-Options",
+          "value": "DENY"
+        },
+        {
+          "key": "X-Content-Type-Options",
+          "value": "nosniff"
+        },
+        {
+          "key": "Referrer-Policy",
+          "value": "strict-origin-when-cross-origin"
+        },
+        {
+          "key": "Permissions-Policy",
+          "value": "camera=(), microphone=(), geolocation=(), payment=()"
+        },
+        {
+          "key": "Content-Security-Policy",
+          "value": "default-src 'self'; script-src 'self' https://oapi.map.naver.com https://*.map.naver.com https://*.map.naver.net https://*.pstatic.net https://apis.google.com; worker-src 'self' blob:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com https://cdn.jsdelivr.net; img-src 'self' data: blob: https://*.pstatic.net https://*.map.naver.com https://*.map.naver.net https://*.naver.net https://*.naver.com; connect-src 'self' https://*.googleapis.com https://*.firebaseio.com wss://*.firebaseio.com https://*.firebaseapp.com https://*.map.naver.com https://*.map.naver.net https://*.pstatic.net https://*.naver.net https://*.naver.com https://*.navercorp.com https://cdn.jsdelivr.net; frame-src https://*.firebaseapp.com; frame-ancestors 'none'; object-src 'none'; base-uri 'self'; form-action 'self'"
+        }
+      ]
+    }
+  ],
   "rewrites": [
     {
       "source": "/(.*)",

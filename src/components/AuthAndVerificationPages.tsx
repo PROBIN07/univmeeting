@@ -1,4 +1,4 @@
-import React, { useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { deriveStudentYearLabel, formatRelativeTime } from '../data/seedData';
 import {
   compressCertificateFile,
@@ -17,6 +17,15 @@ import type {
   UserProfile,
   VerificationRequest,
 } from '../types/meeting';
+import {
+  isSafeCertificateDataUrl,
+  isSafeEmailAddress,
+  openSafePdfCertificate,
+  sanitizePlainText,
+  validateNickname,
+  validateStrongPassword,
+  validateStudentId,
+} from '../utils/security';
 
 function ChevronDownSmall() {
   return (
@@ -26,6 +35,7 @@ function ChevronDownSmall() {
       viewBox="0 0 16 16"
       fill="none"
       xmlns="http://www.w3.org/2000/svg"
+      aria-hidden="true"
       className="h-[16px] w-[16px] shrink-0"
     >
       <path
@@ -43,11 +53,14 @@ function GenderBadge({ gender }: { gender: GenderType }) {
   const isMale = gender === '남';
   return (
     <span
+      aria-label={isMale ? '남성' : '여성'}
       className={`inline-flex shrink-0 flex-row items-center rounded-[999px] px-[8px] py-[2px] ${
         isMale ? 'bg-[#ABD2FA]' : 'bg-[#F7C1D4]'
       }`}
     >
-      <span className="text-[12px] font-bold leading-[1.45] text-[#0D050A]">{gender}</span>
+      <span aria-hidden="true" className="text-[12px] font-bold leading-[1.45] text-[#0D050A]">
+        {gender}
+      </span>
     </span>
   );
 }
@@ -93,7 +106,7 @@ export function LoginView({
   };
 
   return (
-    <div className="mx-auto flex min-h-[calc(100vh-72px)] w-full max-w-[1440px] flex-col bg-[#FFFFFF] font-['Noto_Sans_KR',sans-serif]">
+    <div className="mx-auto flex min-h-[calc(100vh-72px)] w-full max-w-[1440px] flex-col bg-[#FFFFFF]">
       {header}
 
       <main className="flex flex-1 flex-col items-center justify-center px-5 py-[64px] md:px-12 xl:px-[120px]">
@@ -123,7 +136,7 @@ export function LoginView({
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   placeholder="yourname@univ.ac.kr"
-                  className="w-full border-0 bg-transparent p-0 font-['Noto_Sans_KR',sans-serif] text-[14px] font-normal text-[#0D050A] placeholder:text-[#6E5464] focus:outline-none"
+                  className="w-full border-0 bg-transparent p-0 text-[14px] font-normal text-[#0D050A] placeholder:text-[#6E5464] focus:outline-none"
                 />
               </div>
             </div>
@@ -139,7 +152,7 @@ export function LoginView({
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   placeholder="비밀번호 입력"
-                  className="w-full border-0 bg-transparent p-0 font-['Noto_Sans_KR',sans-serif] text-[14px] font-normal text-[#0D050A] placeholder:text-[#6E5464] focus:outline-none"
+                  className="w-full border-0 bg-transparent p-0 text-[14px] font-normal text-[#0D050A] placeholder:text-[#6E5464] focus:outline-none"
                 />
               </div>
             </div>
@@ -202,21 +215,27 @@ export function SignupView({
   const [passwordConfirm, setPasswordConfirm] = useState<string>('');
   const [university, setUniversity] = useState<string>('');
   const [department, setDepartment] = useState<string>('');
+  const [agreeTerms, setAgreeTerms] = useState<boolean>(false);
+  const [agreePrivacy, setAgreePrivacy] = useState<boolean>(false);
   const [errorText, setErrorText] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState<boolean>(false);
 
+  const allAgreed = agreeTerms && agreePrivacy;
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!name.trim()) {
-      setErrorText('이름(또는 닉네임)을 입력해 주세요.');
+    const nickCheck = validateNickname(name);
+    if (!nickCheck.valid) {
+      setErrorText(nickCheck.error ?? '올바른 이름(닉네임)을 입력해 주세요.');
       return;
     }
-    if (!email.trim() || !email.includes('@')) {
+    if (!isSafeEmailAddress(email)) {
       setErrorText('올바른 이메일 주소를 입력해 주세요.');
       return;
     }
-    if (password.length < 6) {
-      setErrorText('비밀번호는 6자 이상으로 입력해 주세요.');
+    const pwError = validateStrongPassword(password, email);
+    if (pwError) {
+      setErrorText(pwError);
       return;
     }
     if (password !== passwordConfirm) {
@@ -227,8 +246,13 @@ export function SignupView({
       setErrorText('소속 대학교를 선택해 주세요.');
       return;
     }
-    if (!department.trim()) {
+    const safeDept = sanitizePlainText(department, 50);
+    if (!safeDept) {
       setErrorText('학과(학부)를 입력해 주세요.');
+      return;
+    }
+    if (!agreeTerms || !agreePrivacy) {
+      setErrorText('서비스 이용약관 및 개인정보 수집·이용 필수 동의 항목에 체크해 주세요.');
       return;
     }
     if (submitting) return;
@@ -236,12 +260,12 @@ export function SignupView({
     setSubmitting(true);
     try {
       const profile = await signUpWithEmail({
-        name,
+        name: nickCheck.cleaned,
         gender,
-        email,
+        email: email.trim(),
         password,
         university,
-        department,
+        department: safeDept,
       });
       onSuccess(profile);
     } catch (err) {
@@ -252,7 +276,7 @@ export function SignupView({
   };
 
   return (
-    <div className="mx-auto flex min-h-[calc(100vh-72px)] w-full max-w-[1440px] flex-col bg-[#FFFFFF] font-['Noto_Sans_KR',sans-serif]">
+    <div className="mx-auto flex min-h-[calc(100vh-72px)] w-full max-w-[1440px] flex-col bg-[#FFFFFF]">
       {header}
 
       <main className="flex flex-1 flex-col items-center px-5 py-[56px] md:px-12 xl:px-[120px]">
@@ -278,7 +302,7 @@ export function SignupView({
                   value={name}
                   onChange={(e) => setName(e.target.value)}
                   placeholder="이름 또는 활동 닉네임"
-                  className="w-full border-0 bg-transparent p-0 font-['Noto_Sans_KR',sans-serif] text-[14px] font-normal text-[#0D050A] placeholder:text-[#6E5464] focus:outline-none"
+                  className="w-full border-0 bg-transparent p-0 text-[14px] font-normal text-[#0D050A] placeholder:text-[#6E5464] focus:outline-none"
                 />
               </div>
             </div>
@@ -322,7 +346,7 @@ export function SignupView({
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 placeholder="yourname@univ.ac.kr"
-                className="w-full border-0 bg-transparent p-0 font-['Noto_Sans_KR',sans-serif] text-[14px] font-normal text-[#0D050A] placeholder:text-[#6E5464] focus:outline-none"
+                className="w-full border-0 bg-transparent p-0 text-[14px] font-normal text-[#0D050A] placeholder:text-[#6E5464] focus:outline-none"
               />
             </div>
           </div>
@@ -338,8 +362,8 @@ export function SignupView({
                   autoComplete="new-password"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
-                  placeholder="6자 이상 입력"
-                  className="w-full border-0 bg-transparent p-0 font-['Noto_Sans_KR',sans-serif] text-[14px] font-normal text-[#0D050A] placeholder:text-[#6E5464] focus:outline-none"
+                  placeholder="영문+숫자 포함 8자 이상"
+                  className="w-full border-0 bg-transparent p-0 text-[14px] font-normal text-[#0D050A] placeholder:text-[#6E5464] focus:outline-none"
                 />
               </div>
             </div>
@@ -355,7 +379,7 @@ export function SignupView({
                   value={passwordConfirm}
                   onChange={(e) => setPasswordConfirm(e.target.value)}
                   placeholder="비밀번호 재입력"
-                  className="w-full border-0 bg-transparent p-0 font-['Noto_Sans_KR',sans-serif] text-[14px] font-normal text-[#0D050A] placeholder:text-[#6E5464] focus:outline-none"
+                  className="w-full border-0 bg-transparent p-0 text-[14px] font-normal text-[#0D050A] placeholder:text-[#6E5464] focus:outline-none"
                 />
               </div>
             </div>
@@ -399,14 +423,75 @@ export function SignupView({
                   value={department}
                   onChange={(e) => setDepartment(e.target.value)}
                   placeholder="소속 학과 또는 학부 입력"
-                  className="w-full border-0 bg-transparent p-0 font-['Noto_Sans_KR',sans-serif] text-[14px] font-normal text-[#0D050A] placeholder:text-[#6E5464] focus:outline-none"
+                  className="w-full border-0 bg-transparent p-0 text-[14px] font-normal text-[#0D050A] placeholder:text-[#6E5464] focus:outline-none"
                 />
               </div>
             </div>
           </div>
 
-          <div className="rounded-[8px] bg-[#F7D8E4] px-[16px] py-[14px] text-[13px] font-normal leading-[1.45] text-[#4A3842]">
-            회원가입 완료 후 이어서 학번과 재학증명서를 업로드해 주세요. 운영팀이 확인 후 승인하면 방 생성과 미팅 참여가 활성화돼요.
+          <div className="flex flex-col gap-[10px] rounded-[10px] border border-[#EBCDD9] bg-[#FBEBF1] p-[16px]">
+            <label className="flex cursor-pointer flex-row items-center gap-[8px] border-b border-[#EBCDD9] pb-[10px] text-[14px] font-bold text-[#0D050A]">
+              <input
+                type="checkbox"
+                checked={allAgreed}
+                onChange={(e) => {
+                  const checked = e.target.checked;
+                  setAgreeTerms(checked);
+                  setAgreePrivacy(checked);
+                  setErrorText(null);
+                }}
+                className="h-[17px] w-[17px] shrink-0 accent-[#0D050A]"
+              />
+              <span>필수 약관 전체 동의하기</span>
+            </label>
+
+            <div className="flex flex-row items-center justify-between gap-[8px]">
+              <label className="flex cursor-pointer flex-row items-center gap-[8px] text-[13px] text-[#4A3842]">
+                <input
+                  type="checkbox"
+                  checked={agreeTerms}
+                  onChange={(e) => {
+                    setAgreeTerms(e.target.checked);
+                    setErrorText(null);
+                  }}
+                  className="h-[16px] w-[16px] shrink-0 accent-[#0D050A]"
+                />
+                <span>
+                  <strong className="text-[#0D050A]">[필수]</strong> 만 18세 이상 대학생이며 서비스 이용약관 동의
+                </span>
+              </label>
+              <button
+                type="button"
+                onClick={() => onOpenOverlay({ id: 'terms' })}
+                className="shrink-0 cursor-pointer border-0 bg-transparent p-0 text-[12px] font-bold text-[#6E5464] underline"
+              >
+                전문 보기
+              </button>
+            </div>
+
+            <div className="flex flex-row items-center justify-between gap-[8px]">
+              <label className="flex cursor-pointer flex-row items-center gap-[8px] text-[13px] text-[#4A3842]">
+                <input
+                  type="checkbox"
+                  checked={agreePrivacy}
+                  onChange={(e) => {
+                    setAgreePrivacy(e.target.checked);
+                    setErrorText(null);
+                  }}
+                  className="h-[16px] w-[16px] shrink-0 accent-[#0D050A]"
+                />
+                <span>
+                  <strong className="text-[#0D050A]">[필수]</strong> 개인정보 수집 및 이용 동의 (이메일·닉네임·대학·학과)
+                </span>
+              </label>
+              <button
+                type="button"
+                onClick={() => onOpenOverlay({ id: 'privacy' })}
+                className="shrink-0 cursor-pointer border-0 bg-transparent p-0 text-[12px] font-bold text-[#6E5464] underline"
+              >
+                전문 보기
+              </button>
+            </div>
           </div>
 
           {errorText && (
@@ -481,6 +566,7 @@ export function SchoolVerificationView({
     myRequest?.certificateDataUrl ?? ''
   );
   const [isEditingAgain, setIsEditingAgain] = useState<boolean>(false);
+  const [agreeCertCollection, setAgreeCertCollection] = useState<boolean>(false);
   const [uploadingFile, setUploadingFile] = useState<boolean>(false);
   const [submitting, setSubmitting] = useState<boolean>(false);
   const [errorText, setErrorText] = useState<string | null>(null);
@@ -488,7 +574,7 @@ export function SchoolVerificationView({
 
   if (!user) {
     return (
-      <div className="mx-auto flex min-h-[calc(100vh-72px)] w-full max-w-[1440px] flex-col bg-[#FFFFFF] font-['Noto_Sans_KR',sans-serif]">
+      <div className="mx-auto flex min-h-[calc(100vh-72px)] w-full max-w-[1440px] flex-col bg-[#FFFFFF]">
         {header}
         <main className="flex flex-1 flex-col items-center justify-center px-5 py-[80px] md:px-12 xl:px-[120px]">
           <div className="flex w-full max-w-[480px] flex-col items-center gap-[18px] rounded-[16px] border border-[#EBCDD9] p-[40px] text-center">
@@ -547,16 +633,22 @@ export function SchoolVerificationView({
       setErrorText('인증할 대학교를 선택해 주세요.');
       return;
     }
-    if (!department.trim()) {
+    const safeDept = sanitizePlainText(department, 50);
+    if (!safeDept) {
       setErrorText('학과(학부)를 입력해 주세요.');
       return;
     }
-    if (studentId.trim().length < 4) {
-      setErrorText('정확한 학번을 입력해 주세요.');
+    const sidCheck = validateStudentId(studentId);
+    if (!sidCheck.valid) {
+      setErrorText(sidCheck.error ?? '정확한 학번을 입력해 주세요.');
       return;
     }
-    if (!fileDataUrl) {
-      setErrorText('재학증명서 이미지 또는 PDF 파일을 업로드해 주세요.');
+    if (!fileDataUrl || !isSafeCertificateDataUrl(fileDataUrl)) {
+      setErrorText('정상적인 재학증명서 이미지(JPG/PNG/WEBP) 또는 PDF 파일을 업로드해 주세요.');
+      return;
+    }
+    if (!agreeCertCollection) {
+      setErrorText('학번 및 재학증명서 수집·이용 필수 동의 항목에 체크해 주세요.');
       return;
     }
     if (submitting) return;
@@ -565,13 +657,19 @@ export function SchoolVerificationView({
     try {
       await onSubmitVerification({
         university: selectedSchool,
-        department: department.trim(),
-        studentId: studentId.trim(),
+        department: safeDept,
+        studentId: sidCheck.cleaned,
         certificateFileName: fileName,
         certificateMimeType: fileMimeType,
         certificateDataUrl: fileDataUrl,
       });
       setIsEditingAgain(false);
+    } catch (err) {
+      setErrorText(
+        err instanceof Error
+          ? err.message
+          : '인증 요청 처리 중 오류가 발생했어요.'
+      );
     } finally {
       setSubmitting(false);
     }
@@ -586,7 +684,7 @@ export function SchoolVerificationView({
     : null;
 
   return (
-    <div className="mx-auto flex min-h-[calc(100vh-72px)] w-full max-w-[1440px] flex-col bg-[#FFFFFF] font-['Noto_Sans_KR',sans-serif]">
+    <div className="mx-auto flex min-h-[calc(100vh-72px)] w-full max-w-[1440px] flex-col bg-[#FFFFFF]">
       {header}
 
       <main className="flex flex-col items-center self-stretch px-5 py-[56px] md:px-12 xl:px-[120px]">
@@ -658,14 +756,15 @@ export function SchoolVerificationView({
               </div>
 
               {myRequest?.certificateDataUrl &&
-                myRequest.certificateMimeType.startsWith('image/') && (
+                myRequest.certificateMimeType.startsWith('image/') &&
+                isSafeCertificateDataUrl(myRequest.certificateDataUrl, 'image') && (
                   <div className="flex flex-col gap-[8px]">
                     <span className="text-[13px] font-medium text-[#6E5464]">
                       제출한 증명서 미리보기
                     </span>
                     <img
                       src={myRequest.certificateDataUrl}
-                      alt="제출한 재학증명서"
+                      alt={`${user.university} 제출 재학증명서 미리보기`}
                       className="max-h-[260px] w-fit rounded-[8px] border border-[#EBCDD9] object-contain"
                     />
                   </div>
@@ -740,7 +839,7 @@ export function SchoolVerificationView({
                       value={department}
                       onChange={(e) => setDepartment(e.target.value)}
                       placeholder="소속 학과 또는 학부 입력"
-                      className="w-full border-0 bg-transparent p-0 font-['Noto_Sans_KR',sans-serif] text-[14px] font-normal text-[#0D050A] placeholder:text-[#6E5464] focus:outline-none"
+                      className="w-full border-0 bg-transparent p-0 text-[14px] font-normal text-[#0D050A] placeholder:text-[#6E5464] focus:outline-none"
                     />
                   </div>
                 </div>
@@ -763,7 +862,7 @@ export function SchoolVerificationView({
                     value={studentId}
                     onChange={(e) => setStudentId(e.target.value)}
                     placeholder="전체 학번 입력 (예: 20261234)"
-                    className="w-full border-0 bg-transparent p-0 font-['Noto_Sans_KR',sans-serif] text-[14px] font-normal text-[#0D050A] placeholder:text-[#6E5464] focus:outline-none"
+                    className="w-full border-0 bg-transparent p-0 text-[14px] font-normal text-[#0D050A] placeholder:text-[#6E5464] focus:outline-none"
                   />
                 </div>
               </div>
@@ -776,13 +875,22 @@ export function SchoolVerificationView({
                 <input
                   ref={fileInputRef}
                   type="file"
-                  accept="image/*,application/pdf"
+                  accept=".jpg,.jpeg,.png,.webp,.pdf,image/jpeg,image/png,image/webp,application/pdf"
                   onChange={handleFileChange}
                   className="hidden"
                 />
 
                 <div
+                  role="button"
+                  tabIndex={0}
+                  aria-label="재학증명서 이미지 또는 PDF 파일 선택"
                   onClick={() => fileInputRef.current?.click()}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault();
+                      fileInputRef.current?.click();
+                    }
+                  }}
                   className="flex cursor-pointer flex-col items-center justify-center gap-[10px] rounded-[12px] border border-dashed border-[#D8B4C4] bg-[#FBEBF1] p-[28px] text-center"
                 >
                   {uploadingFile ? (
@@ -794,7 +902,7 @@ export function SchoolVerificationView({
                       {fileMimeType.startsWith('image/') ? (
                         <img
                           src={fileDataUrl}
-                          alt="재학증명서 미리보기"
+                          alt={`${selectedSchool || '선택 대학'} 업로드 재학증명서 미리보기`}
                           className="max-h-[220px] rounded-[8px] border border-[#D8B4C4] bg-[#FFFFFF] object-contain"
                         />
                       ) : (
@@ -826,10 +934,33 @@ export function SchoolVerificationView({
                 </div>
               )}
 
-              <div className="flex flex-col items-stretch self-stretch rounded-[8px] bg-[#F7D8E4] px-[16px] py-[14px]">
+              <div className="flex flex-col gap-[10px] self-stretch rounded-[10px] border border-[#EBCDD9] bg-[#F7D8E4] px-[16px] py-[14px]">
                 <span className="text-[13px] font-normal leading-[1.45] text-[#4A3842]">
-                  제출된 재학증명서는 재학 여부 확인에만 사용돼요. 다른 사용자에게는 학교·학과·입학연도(예: 26학번)만 공개되고 전체 학번은 노출되지 않아요.
+                  제출된 재학증명서는 재학 여부 확인에만 사용되며 이미지 속 EXIF 위치정보는 자동 제거돼요. 타 회원에게는 학교·학과·입학연도(예: 26학번)만 표시되고 전체 학번·증명서 원본은 절대 공개되지 않아요.
                 </span>
+                <div className="flex flex-row items-start justify-between gap-[8px] border-t border-[#D8B4C4] pt-[10px]">
+                  <label className="flex cursor-pointer flex-row items-start gap-[8px] text-[13px] text-[#0D050A]">
+                    <input
+                      type="checkbox"
+                      checked={agreeCertCollection}
+                      onChange={(e) => {
+                        setAgreeCertCollection(e.target.checked);
+                        setErrorText(null);
+                      }}
+                      className="mt-[2px] h-[16px] w-[16px] shrink-0 accent-[#0D050A]"
+                    />
+                    <span>
+                      <strong>[필수]</strong> 본인 명의의 서류이며 재학 여부 심사를 위한 학번·재학증명서 수집·이용에 동의합니다. (마이페이지에서 언제든 즉시 파기 가능)
+                    </span>
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => onOpenOverlay({ id: 'privacy' })}
+                    className="shrink-0 cursor-pointer border-0 bg-transparent p-0 text-[12px] font-bold text-[#4A3842] underline"
+                  >
+                    처리방침
+                  </button>
+                </div>
               </div>
 
               <div className="flex flex-row justify-end gap-[12px] self-stretch">
@@ -874,6 +1005,7 @@ export function AdminPortal({
   onApprove,
   onReject,
   onDirectSetUserVerification,
+  onPurgeUserData,
   onDeleteRoom,
   onTogglePostStatus,
   onDeletePost,
@@ -892,6 +1024,7 @@ export function AdminPortal({
     targetUser: UserProfile,
     decision: 'approved' | 'unverified'
   ) => Promise<void>;
+  onPurgeUserData: (targetUser: UserProfile) => Promise<void>;
   onDeleteRoom: (roomId: string) => Promise<void>;
   onTogglePostStatus: (post: BoardPost) => Promise<void>;
   onDeletePost: (postId: string) => Promise<void>;
@@ -909,6 +1042,15 @@ export function AdminPortal({
   );
   const [rejectingId, setRejectingId] = useState<string | null>(null);
   const [rejectReasonInput, setRejectReasonInput] = useState<string>('');
+
+  useEffect(() => {
+    if (!previewImage) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setPreviewImage(null);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [previewImage]);
 
   const pendingCount = requests.filter((r) => r.status === 'pending').length;
   const approvedCount = requests.filter((r) => r.status === 'approved').length;
@@ -969,13 +1111,17 @@ export function AdminPortal({
   ];
 
   return (
-    <div className="flex h-screen w-full flex-col overflow-hidden bg-[#FFFFFF] font-['Noto_Sans_KR',sans-serif]">
+    <div className="flex h-screen w-full flex-col overflow-hidden bg-[#FFFFFF]">
       {/* 관리자 전용 상단 고정 헤더 */}
       <header className="z-30 w-full shrink-0 border-b border-[#EBCDD9] bg-[#0D050A]">
         <div className="mx-auto flex h-[72px] w-full max-w-[1440px] flex-row items-center justify-between px-5 md:px-12 xl:px-[120px]">
           <div className="flex flex-row items-center gap-[12px]">
-            <div className="h-[28px] w-[28px] rounded-[6px] bg-[#F7C1D4]" />
-            <span className="text-[20px] font-bold text-[#FFFFFF]">대학미팅</span>
+            <img
+              src="/logo.svg?v=2"
+              alt="Univmeeting 로고"
+              className="h-[28px] w-[28px] rounded-[6px] object-cover"
+            />
+            <span className="text-[20px] font-bold text-[#FFFFFF]">Univmeeting</span>
             <span className="rounded-[999px] bg-[#F7C1D4] px-[10px] py-[3px] text-[12px] font-bold text-[#0D050A]">
               ADMIN PORTAL
             </span>
@@ -1220,7 +1366,8 @@ export function AdminPortal({
 
                       <div className="flex w-[260px] shrink-0 flex-col items-center gap-[8px]">
                         {req.certificateDataUrl &&
-                        req.certificateMimeType.startsWith('image/') ? (
+                        req.certificateMimeType.startsWith('image/') &&
+                        isSafeCertificateDataUrl(req.certificateDataUrl, 'image') ? (
                           <>
                             <img
                               src={req.certificateDataUrl}
@@ -1246,21 +1393,22 @@ export function AdminPortal({
                               재학증명서 크게 보기
                             </button>
                           </>
-                        ) : req.certificateDataUrl ? (
-                          <a
-                            href={req.certificateDataUrl}
-                            download={req.certificateFileName || 'certificate.pdf'}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="flex h-[120px] w-full flex-col items-center justify-center gap-[6px] rounded-[10px] border border-[#D8B4C4] bg-[#FBEBF1] p-[16px] text-center no-underline"
+                        ) : req.certificateDataUrl &&
+                          isSafeCertificateDataUrl(req.certificateDataUrl, 'pdf') ? (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              openSafePdfCertificate(req.certificateDataUrl);
+                            }}
+                            className="flex h-[120px] w-full cursor-pointer flex-col items-center justify-center gap-[6px] rounded-[10px] border border-[#D8B4C4] bg-[#FBEBF1] p-[16px] text-center"
                           >
                             <span className="text-[14px] font-bold text-[#0D050A]">
-                              PDF 재학증명서 열기
+                              PDF 재학증명서 안전 열기
                             </span>
-                            <span className="truncate text-[12px] text-[#6E5464]">
+                            <span className="w-full truncate text-[12px] text-[#6E5464]">
                               {req.certificateFileName}
                             </span>
-                          </a>
+                          </button>
                         ) : (
                           <div className="flex h-[120px] w-full items-center justify-center rounded-[10px] border border-[#EBCDD9] text-[13px] text-[#6E5464]">
                             {req.certificateFileName || '첨부 파일 없음'}
@@ -1332,7 +1480,7 @@ export function AdminPortal({
                           </span>
                         </div>
 
-                        <div className="flex shrink-0 flex-row items-center gap-[8px]">
+                        <div className="flex shrink-0 flex-row flex-wrap items-center gap-[8px]">
                           {isApproved ? (
                             <button
                               type="button"
@@ -1350,6 +1498,21 @@ export function AdminPortal({
                               학교 인증 승인
                             </button>
                           )}
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (
+                                window.confirm(
+                                  `${u.name}(${u.email}) 회원의 프로필·재학증명서·개설 방·작성 글을 모두 영구 파기할까요?`
+                                )
+                              ) {
+                                void onPurgeUserData(u);
+                              }
+                            }}
+                            className="cursor-pointer rounded-[8px] border border-[#F5C2C7] bg-[#FFF5F5] px-[12px] py-[9px] text-[13px] font-bold text-[#B42318]"
+                          >
+                            개인정보 파기
+                          </button>
                         </div>
                       </article>
                     );
@@ -1533,7 +1696,12 @@ export function AdminPortal({
                     className="flex flex-row items-center justify-between gap-[20px] rounded-[12px] border border-[#EBCDD9] bg-[#FFFFFF] p-[24px]"
                   >
                     <div className="flex flex-col gap-[6px]">
-                      <div className="flex flex-row items-center gap-[8px]">
+                      <div className="flex flex-row flex-wrap items-center gap-[8px]">
+                        {inq.content.startsWith('[개인정보 삭제 요청') && (
+                          <span className="rounded-[999px] bg-[#FFF5F5] border border-[#F5C2C7] px-[10px] py-[2px] text-[12px] font-bold text-[#B42318]">
+                            개인정보 파기 요청
+                          </span>
+                        )}
                         <span className="text-[14px] font-bold text-[#0D050A]">
                           {inq.email || '비회원 문의'}
                         </span>
@@ -1546,9 +1714,9 @@ export function AdminPortal({
                       </p>
                     </div>
 
-                    {inq.email && (
+                    {isSafeEmailAddress(inq.email) && (
                       <a
-                        href={`mailto:${inq.email}?subject=${encodeURIComponent('[대학미팅] 문의하신 내용에 답변드립니다')}`}
+                        href={`mailto:${encodeURIComponent(inq.email.trim())}?subject=${encodeURIComponent('[Univmeeting] 문의하신 내용에 답변드립니다')}`}
                         className="shrink-0 rounded-[8px] bg-[#0D050A] px-[14px] py-[8px] text-[13px] font-medium text-[#FFFFFF] no-underline"
                       >
                         메일 답변하기

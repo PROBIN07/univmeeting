@@ -38,6 +38,8 @@ export type OverlayId =
   | 'select-university'
   | 'terms'
   | 'privacy'
+  | 'cookies'
+  | 'privacy-delete'
   | 'inquiry';
 
 export interface ActiveOverlayState {

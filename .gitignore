@@ -6,13 +6,18 @@ dist-ssr
 
 # Environment variables & secrets (절대 GitHub 업로드 금지)
 .env
-.env.local
-.env.*.local
-.env.production
+.env.*
+!.env.example
+*.pem
+*.key
+*service-account*.json
 
-# Local personal notes / tokens
+# Local personal notes / tokens / reference bundles
 Figma token.txt
 지도.txt
+전국_고등교육기관_학교명_주소.csv
+daehak-meeting-share/
+/*.csv
 
 # Deployment & IDE caches
 .vercel
