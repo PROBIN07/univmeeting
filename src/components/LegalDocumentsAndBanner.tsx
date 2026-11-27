@@ -165,7 +165,114 @@ export function CookieConsentBanner({
 }
 
 /* =========================================================
-   5. 공통 하단 법적 고지 푸터 (서브 페이지용)
+   5. 하단 우측 순환 광고 배너 (5초 간격 3종 자동 롤링)
+========================================================= */
+interface AdBannerItem {
+  id: 'dairy' | 'studyvoyage' | 'univmeeting';
+  imageSrc: string;
+  alt: string;
+  href?: string;
+}
+
+const FOOTER_AD_BANNERS: AdBannerItem[] = [
+  {
+    id: 'dairy',
+    imageSrc: '/banners/dairy_adbanner.png',
+    alt: 'dAIry AI와 함께 세상에서 가장 쉬운 일기 쓰기 — Google Play에서 보기',
+    href: 'https://play.google.com/store/apps/details?id=com.qkrdltlsska.dairy',
+  },
+  {
+    id: 'studyvoyage',
+    imageSrc: '/banners/studyvoyage_adbanner.png',
+    alt: '훨씬 더 재밌는 공부를 위해 떠나는 항해 STUDY VOYAGE — Google Play에서 보기',
+    href: 'https://play.google.com/store/apps/details?id=com.classof26.study_voyage',
+  },
+  {
+    id: 'univmeeting',
+    imageSrc: '/banners/univmeeting_adbanner.png',
+    alt: 'Univmeeting과 함께할 새로운 광고주를 모집합니다 — 문의하기 열기',
+  },
+];
+
+const AD_ROTATION_INTERVAL_MS = 5000;
+
+export function FooterAdBannerCarousel({
+  onOpenOverlay,
+}: {
+  onOpenOverlay: (overlay: ActiveOverlayState) => void;
+}) {
+  const [activeIndex, setActiveIndex] = useState<number>(0);
+  const [paused, setPaused] = useState<boolean>(false);
+
+  useEffect(() => {
+    if (paused) return;
+    const timer = window.setInterval(() => {
+      setActiveIndex((prev) => (prev + 1) % FOOTER_AD_BANNERS.length);
+    }, AD_ROTATION_INTERVAL_MS);
+    return () => window.clearInterval(timer);
+  }, [paused]);
+
+  return (
+    <div
+      onMouseEnter={() => setPaused(true)}
+      onMouseLeave={() => setPaused(false)}
+      onFocus={() => setPaused(true)}
+      onBlur={() => setPaused(false)}
+      role="region"
+      aria-label="제휴 및 광고 배너"
+      className="relative aspect-[3300/564] w-full max-w-[620px] shrink-0 overflow-hidden rounded-[3px] bg-[#FFFFFF] shadow-[0_2px_10px_rgba(13,5,10,0.08)] md:w-[480px] lg:w-[560px] xl:w-[620px]"
+    >
+      {FOOTER_AD_BANNERS.map((banner, idx) => {
+        const isActive = idx === activeIndex;
+        const commonClassName = `absolute inset-0 block h-full w-full cursor-pointer border-0 bg-transparent p-0 transition-opacity duration-500 ease-in-out ${
+          isActive
+            ? 'z-10 opacity-100 pointer-events-auto'
+            : 'z-0 opacity-0 pointer-events-none'
+        }`;
+
+        if (banner.href) {
+          return (
+            <a
+              key={banner.id}
+              href={banner.href}
+              target="_blank"
+              rel="noopener noreferrer"
+              tabIndex={isActive ? 0 : -1}
+              aria-hidden={!isActive}
+              className={commonClassName}
+            >
+              <img
+                src={banner.imageSrc}
+                alt={banner.alt}
+                className="block h-full w-full object-cover"
+              />
+            </a>
+          );
+        }
+
+        return (
+          <button
+            key={banner.id}
+            type="button"
+            tabIndex={isActive ? 0 : -1}
+            aria-hidden={!isActive}
+            onClick={() => onOpenOverlay({ id: 'inquiry' })}
+            className={commonClassName}
+          >
+            <img
+              src={banner.imageSrc}
+              alt={banner.alt}
+              className="block h-full w-full object-cover"
+            />
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+/* =========================================================
+   6. 공통 하단 법적 고지 푸터 (서브 페이지용)
 ========================================================= */
 export function SubpageLegalFooter({
   onOpenOverlay,
@@ -189,29 +296,36 @@ export function SubpageLegalFooter({
   ];
 
   return (
-    <footer className="mt-auto w-full border-t border-[#EBCDD9] bg-[#FBEBF1] px-5 py-[28px] md:px-12 xl:px-[120px]">
-      <div className="mx-auto flex w-full max-w-[1200px] flex-col gap-[6px]">
-        <span className="text-[14px] font-bold text-[#4A3842]">Univmeeting</span>
-        <nav aria-label="법적 고지 및 고객지원 메뉴" className="flex flex-row flex-wrap items-center gap-x-[8px] gap-y-[4px]">
-          {links.map((item, idx) => (
-            <span key={item.label} className="inline-flex items-center gap-[8px]">
-              {idx > 0 && (
-                <span aria-hidden="true" className="text-[12px] text-[#8E7182]">
-                  ·
-                </span>
-              )}
-              <button
-                type="button"
-                onClick={item.action}
-                className={`cursor-pointer border-0 bg-transparent p-0 text-[13px] hover:text-[#0D050A] hover:underline ${
-                  item.bold ? 'font-bold text-[#0D050A]' : 'font-normal text-[#6E5464]'
-                }`}
-              >
-                {item.label}
-              </button>
-            </span>
-          ))}
-        </nav>
+    <footer className="mt-auto w-full border-t border-[#EBCDD9] bg-[#FBEBF1] px-5 py-[36px] md:px-12 xl:px-[120px]">
+      <div className="mx-auto flex w-full max-w-[1200px] flex-col items-start justify-between gap-[20px] md:flex-row md:items-center">
+        <div className="flex flex-col gap-[6px]">
+          <span className="text-[14px] font-bold text-[#4A3842]">Univmeeting</span>
+          <nav
+            aria-label="법적 고지 및 고객지원 메뉴"
+            className="flex flex-row flex-wrap items-center gap-x-[8px] gap-y-[4px]"
+          >
+            {links.map((item, idx) => (
+              <span key={item.label} className="inline-flex items-center gap-[8px]">
+                {idx > 0 && (
+                  <span aria-hidden="true" className="text-[12px] text-[#8E7182]">
+                    ·
+                  </span>
+                )}
+                <button
+                  type="button"
+                  onClick={item.action}
+                  className={`cursor-pointer border-0 bg-transparent p-0 text-[13px] hover:text-[#0D050A] hover:underline ${
+                    item.bold ? 'font-bold text-[#0D050A]' : 'font-normal text-[#6E5464]'
+                  }`}
+                >
+                  {item.label}
+                </button>
+              </span>
+            ))}
+          </nav>
+        </div>
+
+        <FooterAdBannerCarousel onOpenOverlay={onOpenOverlay} />
       </div>
     </footer>
   );

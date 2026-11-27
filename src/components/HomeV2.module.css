@@ -207,16 +207,24 @@
   -webkit-background-clip: text; background-clip: text; color: transparent;
 }
 
-/* Footer (exact match to daehak-meeting/src/components/Footer.module.css) */
+/* Footer */
 .footer {
   background: var(--surface-blush);
-  padding: 40px var(--page-x);
+  padding: 44px var(--page-x);
   display: flex;
-  flex-direction: column;
-  gap: 8px;
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px 36px;
   font-family: var(--font);
   line-height: 1.45;
   letter-spacing: normal;
+}
+.footerInfo {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }
 .footerBrand { font-size: 16px; font-weight: 700; color: var(--text-secondary); }
 .footerLinks { display: flex; flex-wrap: wrap; align-items: center; gap: 0 6px; font-size: 13px; color: var(--text-muted); }

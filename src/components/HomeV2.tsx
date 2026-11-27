@@ -2,6 +2,7 @@ import React, { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import { getMaxMembersPerTeam } from '../data/seedData';
 import univLogos from '../data/univ-logos.json';
 import type { ActiveOverlayState, MeetingRoom, PageId } from '../types/meeting';
+import { FooterAdBannerCarousel } from './LegalDocumentsAndBanner';
 import s from './HomeV2.module.css';
 
 interface ShowcaseTeam {
@@ -808,35 +809,38 @@ export function HomeV2({
       </main>
 
       <footer className={s.footer}>
-        <p className={s.footerBrand}>Univmeeting</p>
-        <div className={s.footerLinks}>
-          {FOOTER_ITEMS.map((item, idx) => (
-            <Fragment key={item.key}>
-              {idx > 0 && <span aria-hidden="true">·</span>}
-              <button
-                type="button"
-                onClick={() => {
-                  if (item.key === 'terms') {
-                    onOpenOverlay({ id: 'terms' });
-                  } else if (item.key === 'privacy') {
-                    onOpenOverlay({ id: 'privacy' });
-                  } else if (item.key === 'cookies') {
-                    onOpenOverlay({ id: 'cookies' });
-                  } else if (item.key === 'report') {
-                    onOpenOverlay({
-                      id: 'report',
-                      reportTarget: { targetType: 'general' },
-                    });
-                  } else if (item.key === 'inquiry') {
-                    onOpenOverlay({ id: 'inquiry' });
-                  }
-                }}
-              >
-                {item.label}
-              </button>
-            </Fragment>
-          ))}
+        <div className={s.footerInfo}>
+          <p className={s.footerBrand}>Univmeeting</p>
+          <div className={s.footerLinks}>
+            {FOOTER_ITEMS.map((item, idx) => (
+              <Fragment key={item.key}>
+                {idx > 0 && <span aria-hidden="true">·</span>}
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (item.key === 'terms') {
+                      onOpenOverlay({ id: 'terms' });
+                    } else if (item.key === 'privacy') {
+                      onOpenOverlay({ id: 'privacy' });
+                    } else if (item.key === 'cookies') {
+                      onOpenOverlay({ id: 'cookies' });
+                    } else if (item.key === 'report') {
+                      onOpenOverlay({
+                        id: 'report',
+                        reportTarget: { targetType: 'general' },
+                      });
+                    } else if (item.key === 'inquiry') {
+                      onOpenOverlay({ id: 'inquiry' });
+                    }
+                  }}
+                >
+                  {item.label}
+                </button>
+              </Fragment>
+            ))}
+          </div>
         </div>
+        <FooterAdBannerCarousel onOpenOverlay={onOpenOverlay} />
       </footer>
     </div>
   );
