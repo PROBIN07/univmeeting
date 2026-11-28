@@ -3005,14 +3005,21 @@ export function App() {
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const toastTimerRef = useRef<number | null>(null);
   const scrollContainerRef = useRef<HTMLDivElement | null>(null);
+  const userRef = useRef<UserProfile | null>(user);
+  userRef.current = user;
+  const prevPageRef = useRef<PageId>(currentPage);
 
   useEffect(() => {
     window.scrollTo({ top: 0 });
     scrollContainerRef.current?.scrollTo({ top: 0 });
   }, [currentPage]);
 
-  // URL 쿼리스트링 및 브라우저 뒤로가기/앞으로가기 동기화
+  // URL 쿼리스트링 및 브라우저 뒤로가기/앞으로가기 동기화 (로그인·회원가입 통과 직후에는 히스토리를 치환해 뒤로가기 시 로그인 창 재노출 방지)
   useEffect(() => {
+    const wasAuthEntryPage =
+      prevPageRef.current === 'login' || prevPageRef.current === 'signup';
+    prevPageRef.current = currentPage;
+
     const params = new URLSearchParams();
     if (currentPage !== 'home') {
       params.set('page', currentPage);
@@ -3028,13 +3035,22 @@ export function App() {
       ? `${window.location.pathname}?${qs}`
       : window.location.pathname;
     if (`${window.location.pathname}${window.location.search}` !== targetUrl) {
-      window.history.pushState(null, '', targetUrl);
+      if (wasAuthEntryPage && userRef.current) {
+        window.history.replaceState(null, '', targetUrl);
+      } else {
+        window.history.pushState(null, '', targetUrl);
+      }
     }
   }, [currentPage, selectedRoomId, selectedPostId]);
 
   useEffect(() => {
     const handlePopState = () => {
       const next = readInitialRouteFromUrl();
+      if (userRef.current && (next.page === 'login' || next.page === 'signup')) {
+        window.history.replaceState(null, '', '/');
+        setCurrentPage('home');
+        return;
+      }
       setCurrentPage(next.page);
       if (next.roomId) setSelectedRoomId(next.roomId);
       if (next.postId) setSelectedPostId(next.postId);
@@ -3584,6 +3600,7 @@ export function App() {
     return (
       <>
         <HomeV2
+          user={user}
           realRooms={rooms}
           univCount={UNIVERSITIES_GEO.length}
           onSelectRoom={handleSelectRoom}

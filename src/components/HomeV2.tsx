@@ -1,7 +1,12 @@
 import React, { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import { getMaxMembersPerTeam } from '../data/seedData';
 import univLogos from '../data/univ-logos.json';
-import type { ActiveOverlayState, MeetingRoom, PageId } from '../types/meeting';
+import type {
+  ActiveOverlayState,
+  MeetingRoom,
+  PageId,
+  UserProfile,
+} from '../types/meeting';
 import { FooterAdBannerCarousel } from './LegalDocumentsAndBanner';
 import s from './HomeV2.module.css';
 
@@ -492,6 +497,7 @@ const FOOTER_ITEMS = [
 ] as const;
 
 export function HomeV2({
+  user,
   realRooms,
   univCount,
   onSelectRoom,
@@ -499,6 +505,7 @@ export function HomeV2({
   onRequestCreateRoom,
   onOpenOverlay,
 }: {
+  user: UserProfile | null;
   realRooms: MeetingRoom[];
   univCount: number;
   onSelectRoom: (roomId: string) => void;
@@ -577,16 +584,29 @@ export function HomeV2({
         <nav aria-label="주요 메뉴" className={s.links}>
           <a href="#steps">진행 방식</a>
         </nav>
-        <a
-          href="?page=login"
-          onClick={(e) => {
-            e.preventDefault();
-            onNavigate('login');
-          }}
-          className={s.navCta}
-        >
-          로그인
-        </a>
+        {user ? (
+          <a
+            href="?page=mypage"
+            onClick={(e) => {
+              e.preventDefault();
+              onNavigate('mypage');
+            }}
+            className={s.navCta}
+          >
+            마이페이지
+          </a>
+        ) : (
+          <a
+            href="?page=login"
+            onClick={(e) => {
+              e.preventDefault();
+              onNavigate('login');
+            }}
+            className={s.navCta}
+          >
+            로그인
+          </a>
+        )}
       </header>
 
       <main id="main">

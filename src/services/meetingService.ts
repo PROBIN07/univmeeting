@@ -444,7 +444,10 @@ function reconcileUserProfile(
     remoteUser?.verificationStatus === 'approved' ||
     remoteUser?.verified === true;
 
-  const sealedLocalApproved = hasValidLocalApprovalSeal(uid, verifReq, localUser);
+  // 서버(remoteUser) 응답이 이미 도착해 미인증/반려로 명시된 경우에는 과거 로컬 서명을 무시하고 서버 상태를 따름
+  const allowLocalSeal = !remoteUser;
+  const sealedLocalApproved =
+    allowLocalSeal && hasValidLocalApprovalSeal(uid, verifReq, localUser);
   const unconfiguredFallback =
     !isFirebaseConfigured && localUser?.verificationStatus === 'approved';
 
@@ -1075,8 +1078,14 @@ export function subscribeAuthAndProfile(
         latestDirectVerif,
         ...latestQueriedVerifs,
       ]);
-      const bestVerif = pickBestVerificationRequest([remoteBest, localVerif]);
-      const isFromServer = Boolean(remoteBest && bestVerif === remoteBest);
+      const bestVerif =
+        !forceLocalOnly && firestoreDbState === 'available'
+          ? remoteBest
+          : pickBestVerificationRequest([remoteBest, localVerif]);
+      const isFromServer = Boolean(
+        (!forceLocalOnly && firestoreDbState === 'available') ||
+          (remoteBest && bestVerif === remoteBest)
+      );
 
       const reconciled = reconcileUserProfile(
         uid,
@@ -1110,10 +1119,12 @@ export function subscribeAuthAndProfile(
       }
     };
 
+    // Firebase Auth 세션이 확인되는 즉시 캐시된 본인 프로필로 먼저 복원하여 홈 이동·새로고침 시 로그인 풀림/깜빡임 방지
+    emitReconciled(true);
+
     void checkFirestoreDbProvisioned().then((dbReady) => {
       if (myGeneration !== authGeneration) return;
       if (!dbReady) {
-        emitReconciled(true);
         return;
       }
 
