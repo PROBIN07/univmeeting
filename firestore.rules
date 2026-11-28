@@ -37,13 +37,13 @@ service cloud.firestore {
       );
     }
 
-    // HTML 태그 및 javascript: 스크립트 삽입 차단
+    // HTML 태그 및 javascript: 스크립트 삽입 차단 (멀티라인 포함)
     function isSafeString(val, minLen, maxLen) {
       return val is string
         && val.size() >= minLen
         && val.size() <= maxLen
-        && !val.matches('.*[<>].*')
-        && !val.matches('(?i).*javascript\\s*:.*');
+        && !val.matches('(?s).*[<>].*')
+        && !val.matches('(?is).*javascript\\s*:.*');
     }
 
     // 1. 회원 프로필 (/users/{userId})
@@ -58,7 +58,7 @@ service cloud.firestore {
         && request.resource.data.uid == userId
         && (!('isAdmin' in request.resource.data) || request.resource.data.isAdmin == false)
         && request.resource.data.gender in ['남', '여']
-        && isSafeString(request.resource.data.name, 2, 20)
+        && isSafeString(request.resource.data.name, 1, 20)
         && isSafeString(request.resource.data.university, 2, 60)
         && isSafeString(request.resource.data.department, 1, 50)
         && (
@@ -76,7 +76,7 @@ service cloud.firestore {
         && request.resource.data.uid == resource.data.uid
         && (!('isAdmin' in request.resource.data) || request.resource.data.isAdmin == false)
         && request.resource.data.gender in ['남', '여']
-        && isSafeString(request.resource.data.name, 2, 20)
+        && isSafeString(request.resource.data.name, 1, 20)
         && isSafeString(request.resource.data.university, 2, 60)
         && isSafeString(request.resource.data.department, 1, 50)
         && (
@@ -104,7 +104,7 @@ service cloud.firestore {
 
     // 2. 재학증명서 인증 신청 (/verificationRequests/{requestId})
     // - 민감 개인정보(학번·재학증명서 원본) 보호: 본인 소유 문서(uid 일치 포함) 및 관리자만 조회 허용!
-    // - 학생은 status == 'pending' 및 검증된 이미지/PDF Base64만 제출 가능
+    // - 대용량 Base64 전체에 정규식을 실행하면 Firestore RE2 한도를 초과하므로 앞 40글자 헤더 슬라이스로 검증
     match /verificationRequests/{requestId} {
       allow get: if isOwner(requestId)
         || (isSignedIn() && resource != null && resource.data.uid == request.auth.uid)
@@ -118,15 +118,15 @@ service cloud.firestore {
         && request.resource.data.uid == request.auth.uid
         && request.resource.data.status == 'pending'
         && request.resource.data.gender in ['남', '여']
-        && isSafeString(request.resource.data.userName, 2, 20)
+        && isSafeString(request.resource.data.userName, 1, 20)
         && isSafeString(request.resource.data.university, 2, 60)
         && isSafeString(request.resource.data.department, 1, 50)
         && isSafeString(request.resource.data.studentId, 4, 16)
         && request.resource.data.certificateMimeType in ['image/jpeg', 'image/png', 'image/webp', 'application/pdf']
         && request.resource.data.certificateDataUrl is string
-        && request.resource.data.certificateDataUrl.size() > 30
-        && request.resource.data.certificateDataUrl.size() < 950000
-        && request.resource.data.certificateDataUrl.matches('^data:(image/(jpeg|png|webp)|application/pdf);base64,[A-Za-z0-9+/=]+$')
+        && request.resource.data.certificateDataUrl.size() > 40
+        && request.resource.data.certificateDataUrl.size() < 980000
+        && request.resource.data.certificateDataUrl[0:40].matches('^data:(image/(jpeg|png|webp)|application/pdf);base64,.*')
       );
 
       allow delete: if isOwner(requestId) || isAdmin();

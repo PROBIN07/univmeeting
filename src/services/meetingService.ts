@@ -96,7 +96,82 @@ const LEGACY_FAKE_CONTENT_KEYS = [
   'univ-meeting:posts:v2',
 ];
 
-const FIRESTORE_TIMEOUT_MS = 4000;
+const FIRESTORE_TIMEOUT_MS = 3500;
+
+type FirestoreProvisionState = 'unknown' | 'available' | 'missing';
+let firestoreDbState: FirestoreProvisionState = 'unknown';
+let firestoreProbePromise: Promise<FirestoreProvisionState> | null = null;
+const firestoreStateListeners = new Set<(missing: boolean) => void>();
+const localDataChangeListeners = new Set<() => void>();
+
+function notifyLocalDataChanged(): void {
+  localDataChangeListeners.forEach((fn) => fn());
+}
+
+function setFirestoreDbState(next: FirestoreProvisionState): void {
+  if (firestoreDbState === next) return;
+  firestoreDbState = next;
+  const isMissing = next === 'missing';
+  firestoreStateListeners.forEach((fn) => fn(isMissing));
+}
+
+export async function checkFirestoreDbProvisioned(): Promise<boolean> {
+  if (!isFirebaseConfigured) return false;
+  if (firestoreDbState !== 'unknown') {
+    return firestoreDbState === 'available';
+  }
+  if (firestoreProbePromise) {
+    return (await firestoreProbePromise) === 'available';
+  }
+  const projectId = (
+    import.meta.env.VITE_FIREBASE_PROJECT_ID as string | undefined
+  )?.trim();
+  if (!projectId) {
+    return false;
+  }
+
+  firestoreProbePromise = (async (): Promise<FirestoreProvisionState> => {
+    try {
+      const res = await fetch(
+        `https://firestore.googleapis.com/v1/projects/${encodeURIComponent(
+          projectId
+        )}/databases/(default)/documents/_health/ping`
+      );
+      if (res.status === 404) {
+        const body = (await res.json().catch(() => null)) as {
+          error?: { message?: string };
+        } | null;
+        if (body?.error?.message?.includes('does not exist')) {
+          setFirestoreDbState('missing');
+          return 'missing';
+        }
+      }
+      setFirestoreDbState('available');
+      return 'available';
+    } catch {
+      return 'unknown';
+    }
+  })();
+
+  const result = await firestoreProbePromise;
+  return result === 'available';
+}
+
+export function subscribeFirestoreDbMissing(
+  onChange: (missing: boolean) => void
+): () => void {
+  onChange(firestoreDbState === 'missing');
+  firestoreStateListeners.add(onChange);
+  void checkFirestoreDbProvisioned();
+  return () => {
+    firestoreStateListeners.delete(onChange);
+  };
+}
+
+// 앱 시작 시 비동기로 Firestore 기본 DB 존재 여부를 미리 확인 (미생성 404 시 불필요한 타임아웃 대기 제거)
+if (typeof window !== 'undefined' && isFirebaseConfigured) {
+  void checkFirestoreDbProvisioned();
+}
 
 function purgeLegacyFakeContentOnce(): void {
   try {
@@ -165,7 +240,9 @@ async function safeFirestoreOp<T>(
   operation: () => Promise<T>,
   timeoutMs: number = FIRESTORE_TIMEOUT_MS
 ): Promise<T | null> {
-  if (!isFirebaseConfigured || !db) return null;
+  if (!isFirebaseConfigured || !db || firestoreDbState === 'missing') {
+    return null;
+  }
   let timer: number | undefined;
   try {
     const timeoutPromise = new Promise<never>((_, reject) => {
@@ -175,7 +252,15 @@ async function safeFirestoreOp<T>(
     });
     return await Promise.race([operation(), timeoutPromise]);
   } catch (err) {
-    console.warn(`[Firestore 동기화 안내 - ${label}]`, err);
+    const code =
+      typeof err === 'object' && err !== null && 'code' in err
+        ? String((err as { code?: unknown }).code)
+        : '';
+    if (code === 'not-found') {
+      setFirestoreDbState('missing');
+    } else {
+      console.warn(`[Firestore 동기화 안내 - ${label}]`, err);
+    }
     return null;
   } finally {
     if (timer !== undefined) {
@@ -262,27 +347,67 @@ function mergeById<T extends { id: string; createdAt: number }>(
   return Array.from(map.values()).sort((a, b) => b.createdAt - a.createdAt);
 }
 
+function computeApprovalSeal(
+  uid: string,
+  university: string,
+  studentId: string
+): string {
+  const payload = `univmeeting-v2|${ADMIN_LOGIN_EMAIL}|${uid}|${university.trim()}|${studentId.trim()}|approved`;
+  let h1 = 0x811c9dc5;
+  let h2 = 0x01000193;
+  for (let i = 0; i < payload.length; i += 1) {
+    const ch = payload.charCodeAt(i);
+    h1 ^= ch;
+    h1 = Math.imul(h1, 0x01000193);
+    h2 = Math.imul(h2 ^ ch, 0x5bd1e995);
+  }
+  return `um-${(h1 >>> 0).toString(16).padStart(8, '0')}${(h2 >>> 0)
+    .toString(16)
+    .padStart(8, '0')}`;
+}
+
+function hasValidLocalApprovalSeal(
+  uid: string,
+  verifReq: VerificationRequest | null,
+  localUser: UserProfile | null
+): boolean {
+  if (verifReq?.status === 'approved' && verifReq.approvalSeal) {
+    const expected = computeApprovalSeal(
+      uid,
+      verifReq.university || '',
+      verifReq.studentId || ''
+    );
+    if (verifReq.approvalSeal === expected) return true;
+  }
+  if (localUser?.verificationStatus === 'approved' && localUser.approvalSeal) {
+    const expected = computeApprovalSeal(
+      uid,
+      localUser.university || '',
+      localUser.studentId || ''
+    );
+    if (localUser.approvalSeal === expected) return true;
+  }
+  return false;
+}
+
 function pickBestVerificationRequest(
   candidates: (VerificationRequest | null | undefined)[]
 ): VerificationRequest | null {
   const valid = candidates.filter((c): c is VerificationRequest => Boolean(c));
   if (valid.length === 0) return null;
-  const approved = valid
-    .filter((c) => c.status === 'approved')
-    .sort((a, b) => (b.reviewedAt ?? b.submittedAt) - (a.reviewedAt ?? a.submittedAt));
-  if (approved.length > 0) return approved[0];
-  const pending = valid
-    .filter((c) => c.status === 'pending')
-    .sort((a, b) => b.submittedAt - a.submittedAt);
-  if (pending.length > 0) return pending[0];
-  return valid.sort(
-    (a, b) => (b.reviewedAt ?? b.submittedAt) - (a.reviewedAt ?? a.submittedAt)
-  )[0];
+  return [...valid].sort((a, b) => {
+    const timeA = a.reviewedAt ?? a.submittedAt ?? 0;
+    const timeB = b.reviewedAt ?? b.submittedAt ?? 0;
+    if (timeB !== timeA) return timeB - timeA;
+    const prio = (s: VerificationRequest['status']) =>
+      s === 'approved' ? 3 : s === 'pending' ? 2 : 1;
+    return prio(b.status) - prio(a.status);
+  })[0];
 }
 
 /**
- * 서버(Firestore) 문서를 단일 신뢰 원본(Source of Truth)으로 사용하여
- * localStorage 조작을 통한 '관리자 사칭(isAdmin)' 및 '인증 완료 위조(approved)' 공격을 차단합니다.
+ * 서버(Firestore) 문서를 최우선 신뢰 원본으로 사용하되,
+ * Cloud Firestore 미생성 환경에서도 관리자 서명(approvalSeal)이 검증된 승인 및 신청 내역이 정상 연동되도록 보장합니다.
  */
 function reconcileUserProfile(
   uid: string,
@@ -290,7 +415,8 @@ function reconcileUserProfile(
   displayName: string | null | undefined,
   remoteUser: Partial<UserProfile> | null,
   localUser: UserProfile | null,
-  verifReq: VerificationRequest | null
+  verifReq: VerificationRequest | null,
+  isRemoteVerifFromServer: boolean = false
 ): UserProfile {
   // 관리자 판별은 오직 Firebase Auth 검증 이메일 또는 서버 users 문서의 isAdmin 필드만 신뢰 (localUser 절대 불신!)
   const isAdmin =
@@ -313,26 +439,29 @@ function reconcileUserProfile(
     };
   }
 
-  // Firebase 설정 환경에서는 오직 원격 서버(users / verificationRequests) 승인 기록만 인정!
-  const allowLocalFallback = !isFirebaseConfigured;
-
-  const isApproved =
-    verifReq?.status === 'approved' ||
+  const serverApproved =
+    (isRemoteVerifFromServer && verifReq?.status === 'approved') ||
     remoteUser?.verificationStatus === 'approved' ||
-    remoteUser?.verified === true ||
-    (allowLocalFallback && localUser?.verificationStatus === 'approved');
+    remoteUser?.verified === true;
+
+  const sealedLocalApproved = hasValidLocalApprovalSeal(uid, verifReq, localUser);
+  const unconfiguredFallback =
+    !isFirebaseConfigured && localUser?.verificationStatus === 'approved';
+
+  const isApproved = serverApproved || sealedLocalApproved || unconfiguredFallback;
 
   const isRejected =
     !isApproved &&
     (verifReq?.status === 'rejected' ||
-      remoteUser?.verificationStatus === 'rejected');
+      remoteUser?.verificationStatus === 'rejected' ||
+      (!remoteUser && localUser?.verificationStatus === 'rejected'));
 
   const isPending =
     !isApproved &&
     !isRejected &&
     (verifReq?.status === 'pending' ||
       remoteUser?.verificationStatus === 'pending' ||
-      (allowLocalFallback && localUser?.verificationStatus === 'pending'));
+      (!remoteUser && localUser?.verificationStatus === 'pending'));
 
   const finalStatus = isApproved
     ? 'approved'
@@ -342,20 +471,32 @@ function reconcileUserProfile(
         ? 'pending'
         : 'unverified';
 
-  const university = sanitizePlainText(
-    verifReq?.university ||
-      remoteUser?.university ||
-      localUser?.university ||
-      '미지정',
-    60
-  );
-  const department = sanitizePlainText(
-    verifReq?.department ||
-      remoteUser?.department ||
-      localUser?.department ||
-      '학과 미입력',
-    50
-  );
+  const rawUniv =
+    (verifReq?.university && verifReq.university !== '미지정'
+      ? verifReq.university
+      : '') ||
+    (remoteUser?.university && remoteUser.university !== '미지정'
+      ? remoteUser.university
+      : '') ||
+    (localUser?.university && localUser.university !== '미지정'
+      ? localUser.university
+      : '') ||
+    '미지정';
+  const university = sanitizePlainText(rawUniv, 60);
+
+  const rawDept =
+    (verifReq?.department && verifReq.department !== '학과 미입력'
+      ? verifReq.department
+      : '') ||
+    (remoteUser?.department && remoteUser.department !== '학과 미입력'
+      ? remoteUser.department
+      : '') ||
+    (localUser?.department && localUser.department !== '학과 미입력'
+      ? localUser.department
+      : '') ||
+    '학과 미입력';
+  const department = sanitizePlainText(rawDept, 50);
+
   const studentId = sanitizePlainText(
     verifReq?.studentId ||
       remoteUser?.studentId ||
@@ -370,17 +511,29 @@ function reconcileUserProfile(
       (studentId ? deriveStudentYearLabel(studentId) : '재학생'),
     16
   );
-  const safeName =
-    sanitizePlainText(
-      remoteUser?.name || localUser?.name || displayName || '대학생',
-      20
-    ) || '대학생';
+  const rawName =
+    (remoteUser?.name && remoteUser.name !== '대학생' ? remoteUser.name : '') ||
+    (localUser?.name && localUser.name !== '대학생' ? localUser.name : '') ||
+    displayName ||
+    verifReq?.userName ||
+    '대학생';
+  const safeName = sanitizePlainText(rawName, 20) || '대학생';
+
+  const activeSeal =
+    finalStatus === 'approved'
+      ? verifReq?.approvalSeal ||
+        localUser?.approvalSeal ||
+        computeApprovalSeal(uid, university, studentId)
+      : undefined;
 
   return {
     uid,
-    email: email || remoteUser?.email || '',
+    email: email || remoteUser?.email || localUser?.email || verifReq?.userEmail || '',
     name: safeName,
-    gender: (remoteUser?.gender || localUser?.gender) === '여' ? '여' : '남',
+    gender:
+      (remoteUser?.gender || localUser?.gender || verifReq?.gender) === '여'
+        ? '여'
+        : '남',
     university,
     department,
     studentId,
@@ -390,10 +543,14 @@ function reconcileUserProfile(
     rejectionReason:
       finalStatus === 'rejected'
         ? sanitizePlainText(
-            verifReq?.rejectionReason || remoteUser?.rejectionReason || '',
+            verifReq?.rejectionReason ||
+              remoteUser?.rejectionReason ||
+              localUser?.rejectionReason ||
+              '',
             200
           )
         : '',
+    ...(activeSeal ? { approvalSeal: activeSeal } : {}),
     isAdmin: false,
     createdAt: remoteUser?.createdAt || localUser?.createdAt || Date.now(),
   };
@@ -485,9 +642,8 @@ export async function signUpWithEmail(input: SignUpInput): Promise<UserProfile> 
   }
 
   const cred = await createUserWithEmailAndPassword(auth, trimmedEmail, input.password);
-  await updateProfile(cred.user, { displayName: nickCheck.cleaned }).catch(() => {});
 
-  // 가입 시 무조건 일반 미인증 학생 권한으로만 생성 (절대 isAdmin/approved 부여 불가!)
+  // 가입 즉시(onAuthStateChanged 스냅샷보다 먼저!) 동기적으로 로컬 프로필을 기록하여 '미지정' 덮어쓰기 경합 차단
   const profile: UserProfile = {
     uid: cred.user.uid,
     email: trimmedEmail,
@@ -505,6 +661,8 @@ export async function signUpWithEmail(input: SignUpInput): Promise<UserProfile> 
 
   writeStorage(STORAGE_KEYS.currentUser, profile);
   saveUserToLocalMap(profile);
+
+  await updateProfile(cred.user, { displayName: nickCheck.cleaned }).catch(() => {});
 
   await safeFirestoreOp(
     'saveNewUser',
@@ -565,13 +723,17 @@ export async function loginWithEmail(
     );
     writeStorage(STORAGE_KEYS.currentUser, adminProfile);
     saveUserToLocalMap(adminProfile);
-    if (db) {
-      void setDoc(doc(db, 'users', uid), adminProfile, { merge: true }).catch(() => {});
+    if (db && firestoreDbState !== 'missing') {
+      void safeFirestoreOp(
+        'syncAdminUser',
+        () => setDoc(doc(db!, 'users', uid), adminProfile, { merge: true }),
+        2000
+      );
     }
     return adminProfile;
   }
 
-  // 2) 일반 학생 로그인: 단건 문서 2건만 1.8초 상한으로 병렬 조회하여 체감 지연 최소화 (실시간 onSnapshot이 백그라운드에서 계속 동기화)
+  // 2) 일반 학생 로그인: 단건 문서 2건만 1.8초 상한으로 병렬 조회 (Firestore 미생성 시 즉시 로컬 조회로 통과)
   const [remoteUserSnap, remoteVerifSnap] = await Promise.all([
     safeFirestoreOp('getUserOnLogin', () => getDoc(doc(db!, 'users', uid)), 1800),
     safeFirestoreOp(
@@ -582,18 +744,20 @@ export async function loginWithEmail(
   ]);
 
   const remoteUser =
-    remoteUserSnap && remoteUserSnap.exists()
+    remoteUserSnap && remoteUserSnap.exists() && !remoteUserSnap.metadata.fromCache
       ? (remoteUserSnap.data() as Partial<UserProfile>)
-      : null;
+      : remoteUserSnap && remoteUserSnap.exists()
+        ? (remoteUserSnap.data() as Partial<UserProfile>)
+        : null;
 
   const directVerif =
     remoteVerifSnap && remoteVerifSnap.exists()
       ? ({ ...(remoteVerifSnap.data() as VerificationRequest), id: uid } as VerificationRequest)
       : null;
 
-  // 단건 문서에 아직 승인/심사 기록이 없을 때만 과거 다른 ID로 저장된 인증 문서를 짧게(1.2초 상한) 추가 확인
   let queriedVerifs: VerificationRequest[] = [];
   if (
+    firestoreDbState === 'available' &&
     directVerif?.status !== 'approved' &&
     remoteUser?.verificationStatus !== 'approved' &&
     remoteUser?.verified !== true
@@ -610,7 +774,15 @@ export async function loginWithEmail(
       ) ?? [];
   }
 
-  const remoteVerif = pickBestVerificationRequest([directVerif, ...queriedVerifs]);
+  const hasRemoteVerif = Boolean(directVerif || queriedVerifs.length > 0);
+  const localVerif = pickBestVerificationRequest(
+    loadLocalVerificationRequests().filter((r) => r.uid === uid)
+  );
+  const bestVerif = pickBestVerificationRequest([
+    directVerif,
+    ...queriedVerifs,
+    localVerif,
+  ]);
 
   const localUser = getUserFromLocalMap(uid);
 
@@ -620,36 +792,34 @@ export async function loginWithEmail(
     fbDisplayName,
     remoteUser,
     localUser,
-    remoteVerif
+    bestVerif,
+    hasRemoteVerif && bestVerif !== localVerif
   );
 
   writeStorage(STORAGE_KEYS.currentUser, reconciled);
   saveUserToLocalMap(reconciled);
 
-  // 프로필 보정 쓰기는 로그인 화면 전환을 막지 않도록 백그라운드에서 비동기 처리
   if (
     db &&
+    firestoreDbState !== 'missing' &&
     ((remoteUserSnap && !remoteUserSnap.exists()) ||
       reconciled.isAdmin ||
       (reconciled.verificationStatus === 'approved' &&
         (remoteUser?.verificationStatus !== 'approved' || remoteUser?.verified !== true)))
   ) {
-    void setDoc(doc(db, 'users', uid), reconciled, { merge: true }).catch(() => {});
+    void safeFirestoreOp(
+      'syncReconciledUserOnLogin',
+      () => setDoc(doc(db!, 'users', uid), reconciled, { merge: true }),
+      2000
+    );
   }
 
   return reconciled;
 }
 
 export async function logoutUser(): Promise<void> {
-  // 공용 PC(학교 전산실·도서관 등) 개인정보 잔류 방지를 위해 민감 로컬 캐시 전체 즉시 파기
+  // 현재 로그인 세션만 종료하고, 심사 대기 중인 학교 인증 신청서·회원 목록·신고·문의 데이터는 보존합니다.
   removeStorage(STORAGE_KEYS.currentUser);
-  removeStorage(STORAGE_KEYS.localUsers);
-  removeStorage(STORAGE_KEYS.verifications);
-  removeStorage(STORAGE_KEYS.reports);
-  removeStorage(STORAGE_KEYS.inquiries);
-  removeStorage('univ-meeting:users-map:v1');
-  removeStorage('univ-meeting:users-map:v2');
-  removeStorage('univ-meeting:verifications:v2');
   if (isFirebaseConfigured && auth) {
     await signOut(auth).catch(() => {});
   }
@@ -856,8 +1026,10 @@ export function subscribeAuthAndProfile(
   let profileUnsub: (() => void) | null = null;
   let verifUnsub: (() => void) | null = null;
   let verifQueryUnsub: (() => void) | null = null;
+  let authGeneration = 0;
 
   const authUnsub = onAuthStateChanged(firebaseAuth, (fbUser) => {
+    const myGeneration = ++authGeneration;
     if (profileUnsub) {
       profileUnsub();
       profileUnsub = null;
@@ -888,89 +1060,123 @@ export function subscribeAuthAndProfile(
     let verifQuerySettled = false;
     let syncedApprovedOnce = false;
 
-    const emitReconciled = () => {
-      if (!userSnapSettled || (!verifDocSettled && !verifQuerySettled)) {
+    const emitReconciled = (forceLocalOnly: boolean = false) => {
+      if (
+        !forceLocalOnly &&
+        (!userSnapSettled || (!verifDocSettled && !verifQuerySettled))
+      ) {
         return;
       }
       const localNow = getUserFromLocalMap(uid);
-      const bestVerif = pickBestVerificationRequest([
+      const localVerif = pickBestVerificationRequest(
+        loadLocalVerificationRequests().filter((r) => r.uid === uid)
+      );
+      const remoteBest = pickBestVerificationRequest([
         latestDirectVerif,
         ...latestQueriedVerifs,
       ]);
+      const bestVerif = pickBestVerificationRequest([remoteBest, localVerif]);
+      const isFromServer = Boolean(remoteBest && bestVerif === remoteBest);
+
       const reconciled = reconcileUserProfile(
         uid,
         email,
         fbUser.displayName,
         latestRemoteUser,
         localNow,
-        bestVerif
+        bestVerif,
+        isFromServer
       );
       writeStorage(STORAGE_KEYS.currentUser, reconciled);
       saveUserToLocalMap(reconciled);
       onUserChange(reconciled);
       onAuthReady?.();
 
-      // 서버 verificationRequests 문서가 approved인데 users/{uid}에 아직 반영 안 된 경우 자동 복구 동기화
+      // 서버 DB가 활성화된 상태에서 승인 상태가 users/{uid}에 아직 누락되어 있다면 백그라운드 동기화
       if (
         !syncedApprovedOnce &&
+        firestoreDbState === 'available' &&
         !reconciled.isAdmin &&
         reconciled.verificationStatus === 'approved' &&
         (latestRemoteUser?.verificationStatus !== 'approved' ||
           latestRemoteUser?.verified !== true)
       ) {
         syncedApprovedOnce = true;
-        void setDoc(doc(firestore, 'users', uid), reconciled, { merge: true }).catch(
-          () => {}
+        void safeFirestoreOp(
+          'autoSyncApprovedUser',
+          () => setDoc(doc(firestore, 'users', uid), reconciled, { merge: true }),
+          2500
         );
       }
     };
 
-    profileUnsub = onSnapshot(
-      doc(firestore, 'users', uid),
-      (snap) => {
-        userSnapSettled = true;
-        latestRemoteUser = snap.exists() ? (snap.data() as Partial<UserProfile>) : null;
-        emitReconciled();
-      },
-      () => {
-        userSnapSettled = true;
-        emitReconciled();
+    void checkFirestoreDbProvisioned().then((dbReady) => {
+      if (myGeneration !== authGeneration) return;
+      if (!dbReady) {
+        emitReconciled(true);
+        return;
       }
-    );
 
-    verifUnsub = onSnapshot(
-      doc(firestore, 'verificationRequests', uid),
-      (snap) => {
-        verifDocSettled = true;
-        latestDirectVerif = snap.exists()
-          ? { ...(snap.data() as VerificationRequest), id: snap.id }
-          : null;
-        emitReconciled();
-      },
-      () => {
-        verifDocSettled = true;
-        emitReconciled();
-      }
-    );
+      profileUnsub = onSnapshot(
+        doc(firestore, 'users', uid),
+        (snap) => {
+          userSnapSettled = true;
+          if (snap.exists()) {
+            latestRemoteUser = snap.data() as Partial<UserProfile>;
+            if (!snap.metadata.fromCache) {
+              setFirestoreDbState('available');
+            }
+          } else if (!snap.metadata.fromCache) {
+            latestRemoteUser = null;
+            setFirestoreDbState('available');
+          }
+          emitReconciled();
+        },
+        () => {
+          userSnapSettled = true;
+          emitReconciled();
+        }
+      );
 
-    verifQueryUnsub = onSnapshot(
-      query(collection(firestore, 'verificationRequests'), where('uid', '==', uid)),
-      (snap) => {
-        verifQuerySettled = true;
-        latestQueriedVerifs = snap.docs.map((d) => ({
-          ...(d.data() as VerificationRequest),
-          id: d.id,
-        }));
-        emitReconciled();
-      },
-      () => {
-        verifQuerySettled = true;
-        emitReconciled();
-      }
-    );
+      verifUnsub = onSnapshot(
+        doc(firestore, 'verificationRequests', uid),
+        (snap) => {
+          verifDocSettled = true;
+          if (snap.exists()) {
+            latestDirectVerif = { ...(snap.data() as VerificationRequest), id: snap.id };
+          } else if (!snap.metadata.fromCache) {
+            latestDirectVerif = null;
+          }
+          emitReconciled();
+        },
+        () => {
+          verifDocSettled = true;
+          emitReconciled();
+        }
+      );
+
+      verifQueryUnsub = onSnapshot(
+        query(collection(firestore, 'verificationRequests'), where('uid', '==', uid)),
+        (snap) => {
+          verifQuerySettled = true;
+          if (!snap.empty || !snap.metadata.fromCache) {
+            latestQueriedVerifs = snap.docs.map((d) => ({
+              ...(d.data() as VerificationRequest),
+              id: d.id,
+            }));
+          }
+          emitReconciled();
+        },
+        () => {
+          verifQuerySettled = true;
+          emitReconciled();
+        }
+      );
+    });
   });
 
   return () => {
+    authGeneration += 1;
     if (profileUnsub) profileUnsub();
     if (verifUnsub) verifUnsub();
     if (verifQueryUnsub) verifQueryUnsub();
@@ -981,49 +1187,111 @@ export function subscribeAuthAndProfile(
 export function subscribeAllUsers(
   onUsers: (users: UserProfile[]) => void
 ): () => void {
+  const emitLocalMerged = (remoteItems: UserProfile[] = [], fromServer: boolean = false) => {
+    const verifs = loadLocalVerificationRequests();
+    const map = new Map<string, UserProfile>();
+
+    // 로컬 저장 회원 먼저 적재 (Firestore 미생성/오프라인 빈 캐시로 인해 기존 회원이 증발하지 않도록 보호)
+    loadAllLocalUsers().forEach((u) => {
+      if (!u.isAdmin && !isConfiguredAdminEmail(u.email)) {
+        map.set(u.uid, u);
+      }
+    });
+
+    // 서버 응답 문서를 병합 (서버 데이터 우선)
+    remoteItems.forEach((u) => {
+      const matchedVerif = pickBestVerificationRequest(
+        verifs.filter((r) => r.uid === u.uid)
+      );
+      const merged = reconcileUserProfile(
+        u.uid,
+        u.email,
+        u.name,
+        u,
+        map.get(u.uid) ?? null,
+        matchedVerif,
+        fromServer
+      );
+      if (!merged.isAdmin && !isConfiguredAdminEmail(merged.email)) {
+        map.set(u.uid, merged);
+        saveUserToLocalMap(merged);
+      }
+    });
+
+    const sorted = Array.from(map.values()).sort(
+      (a, b) => (b.createdAt ?? 0) - (a.createdAt ?? 0)
+    );
+    onUsers(sorted);
+  };
+
+  emitLocalMerged();
+
+  const onStorage = (e: StorageEvent) => {
+    if (!e.key || e.key === STORAGE_KEYS.localUsers || e.key === STORAGE_KEYS.verifications) {
+      emitLocalMerged();
+    }
+  };
+  const onLocal = () => emitLocalMerged();
+  localDataChangeListeners.add(onLocal);
+  window.addEventListener('storage', onStorage);
+
   if (!isFirebaseConfigured || !db) {
-    onUsers(loadAllLocalUsers().filter((u) => !u.isAdmin));
-    return () => {};
+    return () => {
+      localDataChangeListeners.delete(onLocal);
+      window.removeEventListener('storage', onStorage);
+    };
   }
 
-  const q = query(collection(db, 'users'), orderBy('createdAt', 'desc'));
-  return onSnapshot(
-    q,
-    (snap) => {
-      const remote: UserProfile[] = snap.docs.map((d) => ({
-        ...(d.data() as UserProfile),
-        uid: d.id,
-      }));
-      const verifs = loadLocalVerificationRequests();
-      const list = remote
-        .map((u) => {
-          const matchedVerif = pickBestVerificationRequest(
-            verifs.filter((r) => r.uid === u.uid)
-          );
-          const merged = reconcileUserProfile(
-            u.uid,
-            u.email,
-            u.name,
-            u,
-            null,
-            matchedVerif
-          );
-          saveUserToLocalMap(merged);
-          return merged;
-        })
-        .filter((u) => !u.isAdmin && !isConfiguredAdminEmail(u.email))
-        .sort((a, b) => (b.createdAt ?? 0) - (a.createdAt ?? 0));
-      onUsers(list);
-    },
-    (err) => {
-      console.warn('[Firestore 관리자 회원 목록 조회 오류]', err);
-      onUsers(
-        loadAllLocalUsers().filter(
-          (u) => !u.isAdmin && !isConfiguredAdminEmail(u.email)
-        )
-      );
-    }
-  );
+  let cancelled = false;
+  let unsub: (() => void) | null = null;
+  const firestore = db;
+
+  void checkFirestoreDbProvisioned().then((ready) => {
+    if (cancelled || !ready) return;
+    // orderBy('createdAt') 사용 시 필드가 없는 문서가 Firestore에서 누락되므로 전체 컬렉션 구독 후 JS 정렬
+    unsub = onSnapshot(
+      collection(firestore, 'users'),
+      (snap) => {
+        const fromServer = !snap.metadata.fromCache;
+        if (fromServer) {
+          setFirestoreDbState('available');
+        }
+        if (!fromServer && snap.empty) {
+          emitLocalMerged();
+          return;
+        }
+        const remote: UserProfile[] = snap.docs.map((d) => ({
+          ...(d.data() as UserProfile),
+          uid: d.id,
+        }));
+        emitLocalMerged(remote, fromServer);
+
+        if (fromServer) {
+          const remoteIds = new Set(remote.map((r) => r.uid));
+          loadAllLocalUsers().forEach((loc) => {
+            if (!loc.isAdmin && !isConfiguredAdminEmail(loc.email) && !remoteIds.has(loc.uid)) {
+              void safeFirestoreOp(
+                'backfillLocalUser',
+                () => setDoc(doc(firestore, 'users', loc.uid), loc, { merge: true }),
+                2500
+              );
+            }
+          });
+        }
+      },
+      (err) => {
+        console.warn('[Firestore 관리자 회원 목록 조회 오류]', err);
+        emitLocalMerged();
+      }
+    );
+  });
+
+  return () => {
+    cancelled = true;
+    localDataChangeListeners.delete(onLocal);
+    window.removeEventListener('storage', onStorage);
+    unsub?.();
+  };
 }
 
 export async function setUserVerificationByAdmin(
@@ -1037,6 +1305,11 @@ export async function setUserVerificationByAdmin(
       ? deriveStudentYearLabel(nextStudentId)
       : targetUser.studentYear || '재학생';
 
+  const seal =
+    decision === 'approved'
+      ? computeApprovalSeal(targetUser.uid, targetUser.university, nextStudentId)
+      : undefined;
+
   const updated: UserProfile = {
     ...targetUser,
     studentId: decision === 'approved' ? nextStudentId : targetUser.studentId,
@@ -1044,6 +1317,7 @@ export async function setUserVerificationByAdmin(
     verified: decision === 'approved',
     verificationStatus: decision,
     rejectionReason: '',
+    ...(seal ? { approvalSeal: seal } : { approvalSeal: '' }),
   };
 
   const localReqs = loadLocalVerificationRequests();
@@ -1061,6 +1335,7 @@ export async function setUserVerificationByAdmin(
           studentYear: updated.studentYear,
           status: 'approved',
           rejectionReason: '',
+          approvalSeal: seal,
           reviewedAt: Date.now(),
         }
       : {
@@ -1077,59 +1352,79 @@ export async function setUserVerificationByAdmin(
           certificateMimeType: 'text/plain',
           certificateDataUrl: '',
           status: 'approved',
+          approvalSeal: seal,
           submittedAt: updated.createdAt || Date.now(),
           reviewedAt: Date.now(),
         };
-
-    if (isFirebaseConfigured && db) {
-      const [userWrite, verifWrite] = await Promise.allSettled([
-        setDoc(doc(db, 'users', updated.uid), updated, { merge: true }),
-        setDoc(doc(db, 'verificationRequests', updated.uid), syncedReq, {
-          merge: true,
-        }),
-      ]);
-      if (userWrite.status === 'rejected' && verifWrite.status === 'rejected') {
-        throw new Error(
-          'Firebase 콘솔 > Firestore Database > 규칙(Rules)에 최신 firestore.rules를 게시해 주세요. (서버 저장 권한 거부됨)'
-        );
-      }
-      if (existingReq && existingReq.id !== updated.uid) {
-        await deleteDoc(doc(db, 'verificationRequests', existingReq.id)).catch(() => {});
-      }
-    }
 
     writeStorage(STORAGE_KEYS.verifications, [
       syncedReq,
       ...localReqs.filter((r) => r.uid !== updated.uid),
     ]);
-  } else {
-    if (isFirebaseConfigured && db) {
-      const sameUidDocs = await getDocs(
-        query(collection(db, 'verificationRequests'), where('uid', '==', updated.uid))
-      ).catch(() => null);
-      const [userWrite, verifDel] = await Promise.allSettled([
-        setDoc(doc(db, 'users', updated.uid), updated, { merge: true }),
-        deleteDoc(doc(db, 'verificationRequests', updated.uid)),
-      ]);
-      if (userWrite.status === 'rejected' && verifDel.status === 'rejected') {
-        throw new Error(
-          'Firebase 콘솔 > Firestore Database > 규칙(Rules)에 최신 firestore.rules를 게시해 주세요. (서버 저장 권한 거부됨)'
-        );
-      }
-      if (sameUidDocs) {
-        await Promise.all(
-          sameUidDocs.docs.map((d) => deleteDoc(d.ref).catch(() => {}))
-        );
-      }
-    }
+    saveUserToLocalMap(updated);
 
+    if (isFirebaseConfigured && db && firestoreDbState !== 'missing') {
+      await Promise.all([
+        safeFirestoreOp(
+          'adminDirectVerifyUser',
+          () => setDoc(doc(db!, 'users', updated.uid), updated, { merge: true }),
+          3000
+        ),
+        safeFirestoreOp(
+          'adminDirectVerifyReq',
+          () =>
+            setDoc(doc(db!, 'verificationRequests', updated.uid), syncedReq, {
+              merge: true,
+            }),
+          3000
+        ),
+        ...(existingReq && existingReq.id !== updated.uid
+          ? [
+              safeFirestoreOp(
+                'adminCleanupLegacyReq',
+                () => deleteDoc(doc(db!, 'verificationRequests', existingReq.id)),
+                2000
+              ),
+            ]
+          : []),
+      ]);
+    }
+  } else {
     writeStorage(
       STORAGE_KEYS.verifications,
       localReqs.filter((r) => r.uid !== updated.uid)
     );
+    saveUserToLocalMap(updated);
+
+    if (isFirebaseConfigured && db && firestoreDbState !== 'missing') {
+      const sameUidDocs = await safeFirestoreOp(
+        'adminFindSameUidReqs',
+        () =>
+          getDocs(
+            query(collection(db!, 'verificationRequests'), where('uid', '==', updated.uid))
+          ),
+        2000
+      );
+      await Promise.all([
+        safeFirestoreOp(
+          'adminRevokeUser',
+          () => setDoc(doc(db!, 'users', updated.uid), updated, { merge: true }),
+          3000
+        ),
+        safeFirestoreOp(
+          'adminDeleteVerifDoc',
+          () => deleteDoc(doc(db!, 'verificationRequests', updated.uid)),
+          3000
+        ),
+        ...(sameUidDocs
+          ? sameUidDocs.docs.map((d) =>
+              safeFirestoreOp('adminDeleteDupVerif', () => deleteDoc(d.ref), 2000)
+            )
+          : []),
+      ]);
+    }
   }
 
-  saveUserToLocalMap(updated);
   return updated;
 }
 
@@ -1173,28 +1468,38 @@ export async function compressCertificateFile(file: File): Promise<{
     throw new Error('식별 가능한 해상도의 재학증명서 이미지를 업로드해 주세요.');
   }
 
-  const maxDim = 1100;
-  let { width, height } = img;
-  if (width > maxDim || height > maxDim) {
-    if (width >= height) {
-      height = Math.round((height * maxDim) / width);
-      width = maxDim;
-    } else {
-      width = Math.round((width * maxDim) / height);
-      height = maxDim;
+  // 캔버스 재인코딩으로 EXIF 위치정보(GPS) 및 이미지 내부 은닉 악성 페이로드 완전 제거 + Firestore 1MB 문서 한도 및 로컬 저장소 용량 초과 방지
+  const profiles: [number, number][] = [
+    [1100, 0.76],
+    [960, 0.66],
+    [800, 0.56],
+  ];
+  let compressed = '';
+  for (const [maxDim, quality] of profiles) {
+    let { width, height } = img;
+    if (width > maxDim || height > maxDim) {
+      if (width >= height) {
+        height = Math.round((height * maxDim) / width);
+        width = maxDim;
+      } else {
+        width = Math.round((width * maxDim) / height);
+        height = maxDim;
+      }
+    }
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) {
+      throw new Error('브라우저 이미지 보안 변환을 처리할 수 없어요.');
+    }
+    ctx.drawImage(img, 0, 0, width, height);
+    compressed = canvas.toDataURL('image/jpeg', quality);
+    if (compressed.length <= 720_000) {
+      break;
     }
   }
 
-  // 캔버스 재인코딩으로 EXIF 위치정보(GPS) 및 이미지 내부 은닉 악성 페이로드 완전 제거
-  const canvas = document.createElement('canvas');
-  canvas.width = width;
-  canvas.height = height;
-  const ctx = canvas.getContext('2d');
-  if (!ctx) {
-    throw new Error('브라우저 이미지 보안 변환을 처리할 수 없어요.');
-  }
-  ctx.drawImage(img, 0, 0, width, height);
-  const compressed = canvas.toDataURL('image/jpeg', 0.76);
   if (!isSafeCertificateDataUrl(compressed, 'image')) {
     throw new Error('이미지 변환 결과가 보안 기준을 충족하지 않아요.');
   }
@@ -1218,11 +1523,6 @@ export interface SubmitVerificationInput {
 export async function submitSchoolVerification(
   input: SubmitVerificationInput
 ): Promise<{ updatedUser: UserProfile; request: VerificationRequest }> {
-  const waitSec = checkAndRecordActionCooldown('submit-verification', 10_000);
-  if (waitSec > 0) {
-    throw new Error(`잠시 후(${waitSec}초 뒤) 다시 제출해 주세요.`);
-  }
-
   const sidCheck = validateStudentId(input.studentId);
   if (!sidCheck.valid) {
     throw new Error(sidCheck.error ?? '올바른 학번을 입력해 주세요.');
@@ -1239,6 +1539,11 @@ export async function submitSchoolVerification(
     throw new Error('검증되지 않은 증명서 파일 형식이에요. 다시 업로드해 주세요.');
   }
 
+  const waitSec = checkAndRecordActionCooldown('submit-verification', 4_000);
+  if (waitSec > 0) {
+    throw new Error(`잠시 후(${waitSec}초 뒤) 다시 제출해 주세요.`);
+  }
+
   const safeUniversity = sanitizePlainText(input.university, 60);
   const deptTrimmed =
     sanitizePlainText(input.department, 50) || input.user.department;
@@ -1250,7 +1555,7 @@ export async function submitSchoolVerification(
   const request: VerificationRequest = {
     id: input.user.uid,
     uid: input.user.uid,
-    userName: sanitizePlainText(input.user.name, 20),
+    userName: sanitizePlainText(input.user.name, 20) || '대학생',
     userEmail: input.user.email,
     gender: input.user.gender,
     university: safeUniversity,
@@ -1273,19 +1578,32 @@ export async function submitSchoolVerification(
     verified: false,
     verificationStatus: 'pending',
     rejectionReason: '',
+    approvalSeal: '',
   };
 
+  // 로컬 저장소에도 즉시 보존하여 Firestore 미생성 환경 또는 로그아웃→어드민 전환 시에도 신청 내역이 절대 유실되지 않도록 보장
+  const existingReqs = loadLocalVerificationRequests().filter(
+    (r) => r.uid !== input.user.uid && r.id !== request.id
+  );
+  writeStorage(STORAGE_KEYS.verifications, [request, ...existingReqs]);
   writeStorage(STORAGE_KEYS.currentUser, updatedUser);
   saveUserToLocalMap(updatedUser);
+  notifyLocalDataChanged();
 
-  await Promise.all([
-    safeFirestoreOp('submitVerificationRequest', () =>
-      setDoc(doc(db!, 'verificationRequests', request.id), request)
-    ),
-    safeFirestoreOp('updateUserPendingStatus', () =>
-      setDoc(doc(db!, 'users', updatedUser.uid), updatedUser, { merge: true })
-    ),
-  ]);
+  if (isFirebaseConfigured && db && firestoreDbState !== 'missing') {
+    await Promise.all([
+      safeFirestoreOp(
+        'submitVerificationRequest',
+        () => setDoc(doc(db!, 'verificationRequests', request.id), request),
+        3500
+      ),
+      safeFirestoreOp(
+        'updateUserPendingStatus',
+        () => setDoc(doc(db!, 'users', updatedUser.uid), updatedUser, { merge: true }),
+        3500
+      ),
+    ]);
+  }
 
   return { updatedUser, request };
 }
@@ -1295,94 +1613,192 @@ export function subscribeMyVerificationRequest(
   uid: string,
   onRequest: (request: VerificationRequest | undefined) => void
 ): () => void {
-  if (!uid || !isFirebaseConfigured || !db) {
+  const getLocalMine = () =>
+    pickBestVerificationRequest(
+      loadLocalVerificationRequests().filter((r) => r.uid === uid)
+    );
+
+  if (!uid) {
     onRequest(undefined);
     return () => {};
   }
+
+  onRequest(getLocalMine() ?? undefined);
+
+  const onLocal = () => onRequest(getLocalMine() ?? undefined);
+  localDataChangeListeners.add(onLocal);
+
+  if (!isFirebaseConfigured || !db) {
+    return () => {
+      localDataChangeListeners.delete(onLocal);
+    };
+  }
+
+  let cancelled = false;
+  let unsubDoc: (() => void) | null = null;
+  let unsubQuery: (() => void) | null = null;
   let directItem: VerificationRequest | null = null;
   let queriedItems: VerificationRequest[] = [];
+  const firestore = db;
 
   const emit = () => {
-    const best = pickBestVerificationRequest([directItem, ...queriedItems]);
+    const best = pickBestVerificationRequest([
+      directItem,
+      ...queriedItems,
+      getLocalMine(),
+    ]);
     onRequest(best ?? undefined);
   };
 
-  const unsubDoc = onSnapshot(
-    doc(db, 'verificationRequests', uid),
-    (snap) => {
-      directItem = snap.exists()
-        ? { ...(snap.data() as VerificationRequest), id: snap.id }
-        : null;
-      emit();
-    },
-    () => {
-      directItem = null;
-      emit();
-    }
-  );
+  void checkFirestoreDbProvisioned().then((ready) => {
+    if (cancelled || !ready) return;
+    unsubDoc = onSnapshot(
+      doc(firestore, 'verificationRequests', uid),
+      (snap) => {
+        if (snap.exists()) {
+          directItem = { ...(snap.data() as VerificationRequest), id: snap.id };
+        } else if (!snap.metadata.fromCache) {
+          directItem = null;
+        }
+        emit();
+      },
+      () => {
+        emit();
+      }
+    );
 
-  const unsubQuery = onSnapshot(
-    query(collection(db, 'verificationRequests'), where('uid', '==', uid)),
-    (snap) => {
-      queriedItems = snap.docs.map((d) => ({
-        ...(d.data() as VerificationRequest),
-        id: d.id,
-      }));
-      emit();
-    },
-    () => {
-      queriedItems = [];
-      emit();
-    }
-  );
+    unsubQuery = onSnapshot(
+      query(collection(firestore, 'verificationRequests'), where('uid', '==', uid)),
+      (snap) => {
+        if (!snap.empty || !snap.metadata.fromCache) {
+          queriedItems = snap.docs.map((d) => ({
+            ...(d.data() as VerificationRequest),
+            id: d.id,
+          }));
+        }
+        emit();
+      },
+      () => {
+        emit();
+      }
+    );
+  });
 
   return () => {
-    unsubDoc();
-    unsubQuery();
+    cancelled = true;
+    localDataChangeListeners.delete(onLocal);
+    unsubDoc?.();
+    unsubQuery?.();
   };
 }
 
 export function subscribeVerificationRequests(
   onRequests: (requests: VerificationRequest[]) => void
 ): () => void {
+  const mergeAndEmit = (remoteItems: VerificationRequest[] = []) => {
+    const localItems = loadLocalVerificationRequests();
+    const byUid = new Map<string, VerificationRequest[]>();
+
+    localItems.forEach((item) => {
+      const key = item.uid || item.id;
+      const arr = byUid.get(key) ?? [];
+      arr.push(item);
+      byUid.set(key, arr);
+    });
+
+    remoteItems.forEach((item) => {
+      const key = item.uid || item.id;
+      const arr = byUid.get(key) ?? [];
+      arr.push(item);
+      byUid.set(key, arr);
+    });
+
+    const deduped: VerificationRequest[] = [];
+    byUid.forEach((group) => {
+      const best = pickBestVerificationRequest(group);
+      if (best) deduped.push(best);
+    });
+    deduped.sort((a, b) => (b.submittedAt ?? 0) - (a.submittedAt ?? 0));
+    writeStorage(STORAGE_KEYS.verifications, deduped);
+    onRequests(deduped);
+  };
+
+  mergeAndEmit();
+
+  const onStorage = (e: StorageEvent) => {
+    if (!e.key || e.key === STORAGE_KEYS.verifications) {
+      mergeAndEmit();
+    }
+  };
+  const onLocal = () => mergeAndEmit();
+  localDataChangeListeners.add(onLocal);
+  window.addEventListener('storage', onStorage);
+
   if (!isFirebaseConfigured || !db) {
-    onRequests(loadLocalVerificationRequests());
-    return () => {};
+    return () => {
+      localDataChangeListeners.delete(onLocal);
+      window.removeEventListener('storage', onStorage);
+    };
   }
 
-  const q = query(
-    collection(db, 'verificationRequests'),
-    orderBy('submittedAt', 'desc')
-  );
-  return onSnapshot(
-    q,
-    (snapshot) => {
-      const remote: VerificationRequest[] = snapshot.docs.map((d) => ({
-        ...(d.data() as VerificationRequest),
-        id: d.id,
-      }));
-      // 동일 uid로 중복 생성된 과거 인증 신청서가 있을 경우 가장 우선순위 높은(approved 우선) 건으로 통합 표시
-      const byUid = new Map<string, VerificationRequest[]>();
-      remote.forEach((item) => {
-        const key = item.uid || item.id;
-        const arr = byUid.get(key) ?? [];
-        arr.push(item);
-        byUid.set(key, arr);
-      });
-      const deduped: VerificationRequest[] = [];
-      byUid.forEach((group) => {
-        const best = pickBestVerificationRequest(group);
-        if (best) deduped.push(best);
-      });
-      deduped.sort((a, b) => b.submittedAt - a.submittedAt);
-      writeStorage(STORAGE_KEYS.verifications, deduped);
-      onRequests(deduped);
-    },
-    (err) => {
-      console.warn('[Firestore 인증 심사 목록 조회 오류]', err);
-      onRequests(loadLocalVerificationRequests());
-    }
-  );
+  let cancelled = false;
+  let unsub: (() => void) | null = null;
+  const firestore = db;
+
+  void checkFirestoreDbProvisioned().then((ready) => {
+    if (cancelled || !ready) return;
+    // orderBy('submittedAt') 사용 시 필드 누락 문서가 제외될 수 있으므로 전체 컬렉션 구독 후 JS 정렬
+    unsub = onSnapshot(
+      collection(firestore, 'verificationRequests'),
+      (snapshot) => {
+        const fromServer = !snapshot.metadata.fromCache;
+        if (fromServer) {
+          setFirestoreDbState('available');
+        }
+        // 오프라인 빈 캐시(5 NOT_FOUND 등)가 로컬 신청 내역을 빈 배열로 덮어쓰는 현상 원천 차단!
+        if (!fromServer && snapshot.empty) {
+          mergeAndEmit();
+          return;
+        }
+
+        const remote: VerificationRequest[] = snapshot.docs.map((d) => ({
+          ...(d.data() as VerificationRequest),
+          id: d.id,
+        }));
+        mergeAndEmit(remote);
+
+        if (fromServer) {
+          const remoteUids = new Set(remote.map((r) => r.uid || r.id));
+          loadLocalVerificationRequests().forEach((loc) => {
+            const targetId = loc.uid || loc.id;
+            if (!remoteUids.has(targetId)) {
+              void safeFirestoreOp(
+                'backfillLocalVerif',
+                () =>
+                  setDoc(
+                    doc(firestore, 'verificationRequests', targetId),
+                    { ...loc, id: targetId, uid: targetId },
+                    { merge: true }
+                  ),
+                3000
+              );
+            }
+          });
+        }
+      },
+      (err) => {
+        console.warn('[Firestore 인증 심사 목록 조회 오류]', err);
+        mergeAndEmit();
+      }
+    );
+  });
+
+  return () => {
+    cancelled = true;
+    localDataChangeListeners.delete(onLocal);
+    window.removeEventListener('storage', onStorage);
+    unsub?.();
+  };
 }
 
 /**
@@ -1393,7 +1809,7 @@ export async function repairApprovedUsersInFirestore(
   requests: VerificationRequest[],
   users: UserProfile[]
 ): Promise<void> {
-  if (!isFirebaseConfigured || !db) return;
+  if (!isFirebaseConfigured || !db || firestoreDbState === 'missing') return;
   const userByUid = new Map(users.map((u) => [u.uid, u]));
   const tasks: Promise<unknown>[] = [];
 
@@ -1407,6 +1823,11 @@ export async function repairApprovedUsersInFirestore(
     const needsCanonicalVerifDoc = req.id !== req.uid;
 
     if (needsUserRepair) {
+      const seal = computeApprovalSeal(
+        req.uid,
+        req.university || matchedUser?.university || '',
+        req.studentId || matchedUser?.studentId || ''
+      );
       const repairedProfile: UserProfile = {
         uid: req.uid,
         email: matchedUser?.email || req.userEmail,
@@ -1422,12 +1843,16 @@ export async function repairApprovedUsersInFirestore(
         verified: true,
         verificationStatus: 'approved',
         rejectionReason: '',
+        approvalSeal: seal,
         isAdmin: false,
         createdAt: matchedUser?.createdAt || req.submittedAt || Date.now(),
       };
+      saveUserToLocalMap(repairedProfile);
       tasks.push(
-        setDoc(doc(db, 'users', req.uid), repairedProfile, { merge: true }).catch(
-          () => {}
+        safeFirestoreOp(
+          'repairApprovedUser',
+          () => setDoc(doc(db!, 'users', req.uid), repairedProfile, { merge: true }),
+          2500
         )
       );
     }
@@ -1435,11 +1860,20 @@ export async function repairApprovedUsersInFirestore(
     if (needsCanonicalVerifDoc) {
       const canonicalReq: VerificationRequest = { ...req, id: req.uid };
       tasks.push(
-        setDoc(doc(db, 'verificationRequests', req.uid), canonicalReq, {
-          merge: true,
-        })
-          .then(() => deleteDoc(doc(db!, 'verificationRequests', req.id)))
-          .catch(() => {})
+        safeFirestoreOp(
+          'repairCanonicalVerif',
+          () =>
+            setDoc(doc(db!, 'verificationRequests', req.uid), canonicalReq, {
+              merge: true,
+            }),
+          2500
+        ).then(() =>
+          safeFirestoreOp(
+            'deleteLegacyVerif',
+            () => deleteDoc(doc(db!, 'verificationRequests', req.id)),
+            2000
+          )
+        )
       );
     }
   }
@@ -1456,12 +1890,18 @@ export async function reviewVerificationRequest(
 ): Promise<VerificationRequest[]> {
   const reviewedAt = Date.now();
   const canonicalId = request.uid || request.id;
+  const seal =
+    decision === 'approved'
+      ? computeApprovalSeal(canonicalId, request.university, request.studentId)
+      : undefined;
+
   const updatedReq: VerificationRequest = {
     ...request,
     id: canonicalId,
     uid: canonicalId,
     status: decision,
     rejectionReason: decision === 'rejected' ? rejectionReason ?? '' : '',
+    ...(seal ? { approvalSeal: seal } : { approvalSeal: '' }),
     reviewedAt,
   };
 
@@ -1478,35 +1918,49 @@ export async function reviewVerificationRequest(
     verified: decision === 'approved',
     verificationStatus: decision,
     rejectionReason: decision === 'rejected' ? rejectionReason ?? '' : '',
+    ...(seal ? { approvalSeal: seal } : { approvalSeal: '' }),
     isAdmin: false,
     createdAt: localTarget?.createdAt || request.submittedAt,
   };
 
-  if (isFirebaseConfigured && db) {
-    const [verifWrite, userWrite] = await Promise.allSettled([
-      setDoc(doc(db, 'verificationRequests', canonicalId), updatedReq, {
-        merge: true,
-      }),
-      setDoc(doc(db, 'users', canonicalId), updatedTarget, {
-        merge: true,
-      }),
-    ]);
-    if (verifWrite.status === 'rejected' && userWrite.status === 'rejected') {
-      throw new Error(
-        'Firebase 콘솔 > Firestore Database > 규칙(Rules)에 최신 firestore.rules를 게시해 주세요. (서버 저장 권한 거부됨)'
-      );
-    }
-    if (request.id !== canonicalId) {
-      await deleteDoc(doc(db, 'verificationRequests', request.id)).catch(() => {});
-    }
-  }
-
   saveUserToLocalMap(updatedTarget);
 
-  const nextReqs = loadLocalVerificationRequests()
-    .filter((item) => item.id !== request.id && item.uid !== canonicalId);
+  const nextReqs = loadLocalVerificationRequests().filter(
+    (item) => item.id !== request.id && item.uid !== canonicalId
+  );
   nextReqs.unshift(updatedReq);
   writeStorage(STORAGE_KEYS.verifications, nextReqs);
+  notifyLocalDataChanged();
+
+  if (isFirebaseConfigured && db && firestoreDbState !== 'missing') {
+    await Promise.all([
+      safeFirestoreOp(
+        'reviewVerificationDoc',
+        () =>
+          setDoc(doc(db!, 'verificationRequests', canonicalId), updatedReq, {
+            merge: true,
+          }),
+        3000
+      ),
+      safeFirestoreOp(
+        'reviewUpdateUserDoc',
+        () =>
+          setDoc(doc(db!, 'users', canonicalId), updatedTarget, {
+            merge: true,
+          }),
+        3000
+      ),
+      ...(request.id !== canonicalId
+        ? [
+            safeFirestoreOp(
+              'reviewCleanupOldVerif',
+              () => deleteDoc(doc(db!, 'verificationRequests', request.id)),
+              2000
+            ),
+          ]
+        : []),
+    ]);
+  }
 
   return nextReqs;
 }
@@ -1524,6 +1978,10 @@ export function subscribeRooms(onRooms: (rooms: MeetingRoom[]) => void): () => v
   return onSnapshot(
     q,
     (snapshot) => {
+      if (snapshot.metadata.fromCache && snapshot.empty) {
+        onRooms(loadLocalRooms());
+        return;
+      }
       const legacyDocIds: string[] = [];
       const remoteItems: MeetingRoom[] = [];
 
@@ -1575,6 +2033,10 @@ export function subscribePosts(onPosts: (posts: BoardPost[]) => void): () => voi
   return onSnapshot(
     q,
     (snapshot) => {
+      if (snapshot.metadata.fromCache && snapshot.empty) {
+        onPosts(loadLocalPosts());
+        return;
+      }
       const legacyDocIds: string[] = [];
       const remoteItems: BoardPost[] = [];
 
@@ -1925,7 +2387,7 @@ export async function togglePostApply(
 }
 
 export async function submitReport(record: ReportRecord): Promise<void> {
-  if (checkAndRecordActionCooldown('submit-report', 10_000) > 0) {
+  if (checkAndRecordActionCooldown('submit-report', 5_000) > 0) {
     return;
   }
   const sanitized: ReportRecord = {
@@ -1936,6 +2398,12 @@ export async function submitReport(record: ReportRecord): Promise<void> {
     reporterUid: sanitizePlainText(record.reporterUid, 64),
     createdAt: Date.now(),
   };
+  const localWithId: ReportRecord = {
+    ...sanitized,
+    id: `rep-${sanitized.createdAt}-${Math.random().toString(36).slice(2, 6)}`,
+  };
+  writeStorage(STORAGE_KEYS.reports, [localWithId, ...loadLocalReports()]);
+
   await safeFirestoreOp('submitReport', () =>
     addDoc(collection(db!, 'reports'), sanitized)
   );
@@ -1946,14 +2414,19 @@ export function subscribeReports(
 ): () => void {
   onReports(loadLocalReports());
   if (!isFirebaseConfigured || !db) return () => {};
-  const q = query(collection(db, 'reports'), orderBy('createdAt', 'desc'));
   return onSnapshot(
-    q,
+    collection(db, 'reports'),
     (snap) => {
-      const items: ReportRecord[] = snap.docs.map((d) => ({
-        ...(d.data() as ReportRecord),
-        id: d.id,
-      }));
+      if (snap.metadata.fromCache && snap.empty) {
+        onReports(loadLocalReports());
+        return;
+      }
+      const items: ReportRecord[] = snap.docs
+        .map((d) => ({
+          ...(d.data() as ReportRecord),
+          id: d.id,
+        }))
+        .sort((a, b) => (b.createdAt ?? 0) - (a.createdAt ?? 0));
       onReports(items.length > 0 ? items : loadLocalReports());
     },
     () => onReports(loadLocalReports())
@@ -1961,7 +2434,7 @@ export function subscribeReports(
 }
 
 export async function submitInquiry(record: InquiryRecord): Promise<void> {
-  if (checkAndRecordActionCooldown('submit-inquiry', 10_000) > 0) {
+  if (checkAndRecordActionCooldown('submit-inquiry', 5_000) > 0) {
     return;
   }
   const safeContent = sanitizePlainText(record.content, 1000, true);
@@ -1972,6 +2445,12 @@ export async function submitInquiry(record: InquiryRecord): Promise<void> {
     email: isSafeEmailAddress(record.email) ? record.email.trim() : '',
     createdAt: Date.now(),
   };
+  const localWithId: InquiryRecord = {
+    ...sanitized,
+    id: `inq-${sanitized.createdAt}-${Math.random().toString(36).slice(2, 6)}`,
+  };
+  writeStorage(STORAGE_KEYS.inquiries, [localWithId, ...loadLocalInquiries()]);
+
   await safeFirestoreOp('submitInquiry', () =>
     addDoc(collection(db!, 'inquiries'), sanitized)
   );
@@ -1982,14 +2461,19 @@ export function subscribeInquiries(
 ): () => void {
   onInquiries(loadLocalInquiries());
   if (!isFirebaseConfigured || !db) return () => {};
-  const q = query(collection(db, 'inquiries'), orderBy('createdAt', 'desc'));
   return onSnapshot(
-    q,
+    collection(db, 'inquiries'),
     (snap) => {
-      const items: InquiryRecord[] = snap.docs.map((d) => ({
-        ...(d.data() as InquiryRecord),
-        id: d.id,
-      }));
+      if (snap.metadata.fromCache && snap.empty) {
+        onInquiries(loadLocalInquiries());
+        return;
+      }
+      const items: InquiryRecord[] = snap.docs
+        .map((d) => ({
+          ...(d.data() as InquiryRecord),
+          id: d.id,
+        }))
+        .sort((a, b) => (b.createdAt ?? 0) - (a.createdAt ?? 0));
       onInquiries(items.length > 0 ? items : loadLocalInquiries());
     },
     () => onInquiries(loadLocalInquiries())

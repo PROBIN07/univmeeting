@@ -81,6 +81,7 @@ export interface UserProfile {
   verified: boolean;
   verificationStatus: VerificationStatus;
   rejectionReason?: string;
+  approvalSeal?: string;
   isAdmin?: boolean;
   createdAt: number;
 }
@@ -100,6 +101,7 @@ export interface VerificationRequest {
   certificateDataUrl: string;
   status: 'pending' | 'approved' | 'rejected';
   rejectionReason?: string;
+  approvalSeal?: string;
   submittedAt: number;
   reviewedAt?: number;
 }

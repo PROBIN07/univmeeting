@@ -25,6 +25,7 @@ import {
   deleteMeetingRoom,
   deleteMyVerificationData,
   deleteUserDataByAdmin,
+  loadAllLocalUsers,
   loadCachedCurrentUser,
   loadLocalPosts,
   loadLocalRooms,
@@ -38,6 +39,7 @@ import {
   submitSchoolVerification,
   subscribeAllUsers,
   subscribeAuthAndProfile,
+  subscribeFirestoreDbMissing,
   subscribeInquiries,
   subscribeMyVerificationRequest,
   subscribePosts,
@@ -2991,6 +2993,7 @@ export function App() {
   >(undefined);
   const [reports, setReports] = useState<ReportRecord[]>([]);
   const [inquiries, setInquiries] = useState<InquiryRecord[]>([]);
+  const [firestoreDbMissing, setFirestoreDbMissing] = useState<boolean>(false);
 
   const [selectedRoomId, setSelectedRoomId] = useState<string>(initialRoute.roomId);
   const [selectedPostId, setSelectedPostId] = useState<string>(initialRoute.postId);
@@ -3040,21 +3043,23 @@ export function App() {
     return () => window.removeEventListener('popstate', handlePopState);
   }, []);
 
-  // 공용 데이터(방, 게시글) 및 인증 상태만 기본 구독
+  // 공용 데이터(방, 게시글), 인증 상태 및 Firestore DB 프로비저닝 상태 구독
   useEffect(() => {
     const unsubAuth = subscribeAuthAndProfile(setUser);
     const unsubRooms = subscribeRooms(setRooms);
     const unsubPosts = subscribePosts(setPosts);
+    const unsubDbState = subscribeFirestoreDbMissing(setFirestoreDbMissing);
     return () => {
       unsubAuth();
       unsubRooms();
       unsubPosts();
+      unsubDbState();
     };
   }, []);
 
   // 일반 재학생은 오직 '본인 단건' 인증 신청 내역만 구독 (타인 재학증명서 접근 원천 차단)
   useEffect(() => {
-    if (!user || user.isAdmin) {
+    if (!user?.uid || user.isAdmin) {
       setOwnVerificationRequest(undefined);
       return;
     }
@@ -3063,7 +3068,7 @@ export function App() {
       setOwnVerificationRequest
     );
     return () => unsubMyVerif();
-  }, [user]);
+  }, [user?.uid, user?.isAdmin]);
 
   // 민감 관리자 컬렉션(전체 회원·재학증명서·신고·문의)은 관리자 인증 완료 시에만 구독!
   useEffect(() => {
@@ -3381,6 +3386,9 @@ export function App() {
       try {
         const next = await reviewVerificationRequest(req, 'approved');
         setVerificationRequests(next);
+        setAllUsers(
+          loadAllLocalUsers().filter((u) => !u.isAdmin)
+        );
         if (user && user.uid === req.uid) {
           setUser({
             ...user,
@@ -3411,6 +3419,9 @@ export function App() {
       try {
         const next = await reviewVerificationRequest(req, 'rejected', reason);
         setVerificationRequests(next);
+        setAllUsers(
+          loadAllLocalUsers().filter((u) => !u.isAdmin)
+        );
         if (user && user.uid === req.uid) {
           setUser({
             ...user,
@@ -3553,6 +3564,7 @@ export function App() {
           posts={posts}
           reports={reports}
           inquiries={inquiries}
+          firestoreDbMissing={firestoreDbMissing}
           onApprove={handleApproveVerification}
           onReject={handleRejectVerification}
           onDirectSetUserVerification={handleDirectSetUserVerification}

@@ -572,6 +572,27 @@ export function SchoolVerificationView({
   const [errorText, setErrorText] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
+  // 비동기 프로필/신청서 로드 완료 시 빈 입력칸 자동 채움
+  useEffect(() => {
+    if (!user) return;
+    if (user.university && user.university !== '미지정') {
+      setSelectedSchool((prev) => (!prev || prev === '미지정' ? user.university : prev));
+    }
+    if (user.department && user.department !== '학과 미입력') {
+      setDepartment((prev) => (!prev || prev === '학과 미입력' ? user.department : prev));
+    }
+    if (user.studentId) {
+      setStudentId((prev) => prev || user.studentId);
+    }
+  }, [user]);
+
+  useEffect(() => {
+    if (!myRequest) return;
+    setFileName((prev) => prev || myRequest.certificateFileName);
+    setFileMimeType((prev) => prev || myRequest.certificateMimeType);
+    setFileDataUrl((prev) => prev || myRequest.certificateDataUrl);
+  }, [myRequest]);
+
   if (!user) {
     return (
       <div className="mx-auto flex min-h-[calc(100vh-72px)] w-full max-w-[1440px] flex-col bg-[#FFFFFF]">
@@ -1002,6 +1023,7 @@ export function AdminPortal({
   posts,
   reports,
   inquiries,
+  firestoreDbMissing,
   onApprove,
   onReject,
   onDirectSetUserVerification,
@@ -1018,6 +1040,7 @@ export function AdminPortal({
   posts: BoardPost[];
   reports: ReportRecord[];
   inquiries: InquiryRecord[];
+  firestoreDbMissing?: boolean;
   onApprove: (req: VerificationRequest) => Promise<void>;
   onReject: (req: VerificationRequest, reason: string) => Promise<void>;
   onDirectSetUserVerification: (
@@ -1052,11 +1075,49 @@ export function AdminPortal({
     return () => window.removeEventListener('keydown', onKey);
   }, [previewImage]);
 
-  const pendingCount = requests.filter((r) => r.status === 'pending').length;
-  const approvedCount = requests.filter((r) => r.status === 'approved').length;
-  const rejectedCount = requests.filter((r) => r.status === 'rejected').length;
+  // users 컬렉션에는 pending/approved/rejected 상태가 기록되어 있으나 verificationRequests 문서가 누락된 회원까지 심사 목록에 통합 표시
+  const unifiedRequests: VerificationRequest[] = React.useMemo(() => {
+    const byUid = new Map<string, VerificationRequest>();
+    requests.forEach((req) => {
+      byUid.set(req.uid || req.id, req);
+    });
+    users.forEach((u) => {
+      if (u.isAdmin) return;
+      if (
+        (u.verificationStatus === 'pending' ||
+          u.verificationStatus === 'approved' ||
+          u.verificationStatus === 'rejected') &&
+        !byUid.has(u.uid)
+      ) {
+        byUid.set(u.uid, {
+          id: u.uid,
+          uid: u.uid,
+          userName: u.name,
+          userEmail: u.email,
+          gender: u.gender,
+          university: u.university,
+          department: u.department,
+          studentId: u.studentId || '학번 미기재',
+          studentYear: u.studentYear || '재학생',
+          certificateFileName: '증명서 사본 재확인 필요 (직접 승인 가능)',
+          certificateMimeType: 'text/plain',
+          certificateDataUrl: '',
+          status: u.verificationStatus,
+          rejectionReason: u.rejectionReason ?? '',
+          submittedAt: u.createdAt || Date.now(),
+        });
+      }
+    });
+    return Array.from(byUid.values()).sort(
+      (a, b) => (b.submittedAt ?? 0) - (a.submittedAt ?? 0)
+    );
+  }, [requests, users]);
 
-  const filteredRequests = requests.filter((r) =>
+  const pendingCount = unifiedRequests.filter((r) => r.status === 'pending').length;
+  const approvedCount = unifiedRequests.filter((r) => r.status === 'approved').length;
+  const rejectedCount = unifiedRequests.filter((r) => r.status === 'rejected').length;
+
+  const filteredRequests = unifiedRequests.filter((r) =>
     statusFilter === 'all' ? true : r.status === statusFilter
   );
 
@@ -1154,6 +1215,19 @@ export function AdminPortal({
             </p>
           </div>
 
+          {firestoreDbMissing && (
+            <div className="flex flex-col gap-[6px] rounded-[12px] border border-[#F5C2C7] bg-[#FFF5F5] px-[20px] py-[16px]">
+              <span className="text-[14px] font-bold text-[#B42318]">
+                안내: Firebase 콘솔에 Cloud Firestore 데이터베이스가 아직 생성되지 않았어요 (현재 동일 브라우저 저장 모드)
+              </span>
+              <span className="text-[13px] leading-[1.55] text-[#4A3842]">
+                현재 브라우저에서 신청된 학생 인증은 지금 바로 정상 표시·승인됩니다. 다른 기기(모바일·타 PC)에서 신청한 내역까지 실시간 연동하려면{' '}
+                <strong>Firebase 콘솔(meeting-3457) → 빌드 → Firestore Database → 데이터베이스 만들기</strong>에서 기본{' '}
+                <code>(default)</code> DB를 생성한 뒤 최신 <code>firestore.rules</code>를 게시해 주세요.
+              </span>
+            </div>
+          )}
+
           {/* 상단 섹션 탭 */}
           <div className="flex flex-row flex-wrap self-stretch shadow-[inset_0_-1px_0_0_#EBCDD9]">
             {navTabs.map((t) => {
@@ -1201,7 +1275,7 @@ export function AdminPortal({
                     { id: 'pending', label: `승인 대기 (${pendingCount})` },
                     { id: 'approved', label: `승인 완료 (${approvedCount})` },
                     { id: 'rejected', label: `반려됨 (${rejectedCount})` },
-                    { id: 'all', label: `전체 (${requests.length})` },
+                    { id: 'all', label: `전체 (${unifiedRequests.length})` },
                   ] as const
                 ).map((tab) =>
                   statusFilter === tab.id ? (
